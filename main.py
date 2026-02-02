@@ -123,3 +123,4 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("reset", reset))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc))
     application.run_polling()
+อัดเดย์
