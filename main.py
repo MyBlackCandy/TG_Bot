@@ -73,7 +73,7 @@ def clear_history(user_id):
 
 # --- ส่วนการทำงานของบอท ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('✅ 输入+ 数字 后者 - 数字\n/清理数据 去除所有数据')
+    await update.message.reply_text('✅ 输入+ 数字 后者 - 数字\n/reset 去除所有数据')
 
 async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -119,7 +119,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     init_db()
     application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("开始", start))
-    application.add_handler(CommandHandler("清理数据", reset))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("reset", reset))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc))
     application.run_polling()
