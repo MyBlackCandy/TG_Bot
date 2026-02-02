@@ -127,3 +127,42 @@ if __name__ == '__main__':
     
     print("🚀 Bot is running...")
     application.run_polling()
+async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    user_id = update.message.from_user.id
+
+    # ตรวจจับรูปแบบ +### หรือ -###
+    match = re.match(r'^([+-])(\d+)$', text)
+    if match:
+        operator = match.group(1)
+        value = int(match.group(2))
+        amount = value if operator == '+' else -value
+
+        save_transaction(user_id, amount)
+        history = get_history(user_id)
+        
+        total = sum(history)
+        count = len(history)
+        
+        response = "📋 รายการบันทึกของคุณ:\n"
+        
+        # กรณีรายการมากกว่า 10 รายการ
+        if count > 10:
+            response += "แสดง 10 รายการล่าสุด...\n"
+            # ดึงมาเฉพาะ 10 ตัวท้าย
+            display_items = history[-10:]
+            start_index = count - 9
+        else:
+            display_items = history
+            start_index = 1
+
+        # วนลูปแสดงผลรายการ
+        for i, val in enumerate(display_items, start_index):
+            symbol = "+" if val > 0 else ""
+            response += f"{i}. {symbol}{val}\n"
+        
+        response += f"----------------\n"
+        response += f"📊 ทั้งหมด: {count} รายการ\n"
+        response += f"💰 ยอดรวมสุทธิ: {total}"
+        
+        await update.message.reply_text(response)
