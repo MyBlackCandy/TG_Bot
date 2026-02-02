@@ -73,7 +73,7 @@ def clear_history(user_id):
 
 # --- ส่วนการทำงานของบอท ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('✅ บอทพร้อม! พิมพ์ +เลข หรือ -เลข\n/reset เพื่อล้างข้อมูล')
+    await update.message.reply_text('✅ 输入+ 数字 后者 - 数字\n/清理数据 去除所有数据')
 
 async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -90,11 +90,11 @@ async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = sum(history)
         count = len(history)
         
-        response = "📋 รายการบันทึกของคุณ:\n"
+        response = "📋 AK机器人:记录\n"
         
         # จัดการการย่อรายการ (แสดงแค่ 10 อันล่าสุด)
         if count > 10:
-            response += "⚠️ แสดง 10 รายการล่าสุด...\n"
+            response += "...\n"
             display_items = history[-10:]  # เอา 10 ตัวสุดท้าย
             start_num = count - 9        # คำนวณเลขลำดับเริ่มต้น
         else:
@@ -106,20 +106,20 @@ async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response += f"{i}. {symbol}{val}\n"
         
         response += f"----------------\n"
-        response += f"📊 ทั้งหมด: {count} รายการ\n"
-        response += f"💰 ยอดรวมสุทธิ: {total}"
+        response += f"📊 全部: {count} 项目\n"
+        response += f"💰 总金额: {total}"
         
         await update.message.reply_text(response)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_history(update.message.from_user.id)
-    await update.message.reply_text("🧹 ล้างข้อมูลเรียบร้อย!")
+    await update.message.reply_text("🧹 已清理数据!")
 
 # --- รันโปรแกรม ---
 if __name__ == '__main__':
     init_db()
     application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("reset", reset))
+    application.add_handler(CommandHandler("开始", start))
+    application.add_handler(CommandHandler("清理数据", reset))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc))
     application.run_polling()
