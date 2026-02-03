@@ -2,10 +2,16 @@ import os
 import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
-# นำเข้าฟังก์ชันจากไฟล์ที่เราแยกไว้
 from database import init_db, get_db_connection
 from payment import generate_payment_amount, auto_verify_payment
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != 'private': return
+    uid = update.effective_user.id
+    amt = await generate_payment_amount(uid)
+    await update.message.reply_text(f"🚀 **激活系统**\n💳 金额: `{amt:.3f}` USDT\n地址: `{os.getenv('USDT_ADDRESS')}`\n⚠️ 请务必转账**精确金额**")
+
+
 
 # ดึงค่าแอดมินหลักจาก Environment Variable
 MASTER_ADMIN = os.getenv('ADMIN_ID')
@@ -191,11 +197,8 @@ async def handle_accounting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     init_db()
     app = Application.builder().token(os.getenv('TOKEN')).build()
-    
-    # ระบบ Job Queue ตรวจสอบชำระเงินอัตโนมัติ
     if app.job_queue:
         app.job_queue.run_repeating(auto_verify_payment, interval=60)
-
     # ลงทะเบียนคำสั่ง
     app.add_handler(CommandHandler("start", start)) # ฟังก์ชันจาก payment.py
     app.add_handler(CommandHandler("check", check_status))
