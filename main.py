@@ -173,37 +173,29 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    # กรณี Master Admin
-    if str(uid) == str(MASTER_ADMIN): 
+    
+    # 1. เช็คว่าเป็น Master Admin หรือไม่
+    if str(uid) == str(MASTER_ADMIN):
         return await update.message.reply_text("👑 **身份: 系统主管理员**\n🌟 **状态: 永久有效**")
     
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
     
-    # กรณีเป็นลูกค้าและยังไม่หมดอายุ
+    # 2. กรณีเป็นลูกค้าและยังไม่หมดอายุ
     if res and res[0] > get_now_cn():
         exp_cn = res[0].astimezone(CN_TZ)
         await update.message.reply_text(
             f"✅ **您的权限状态: 正常**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}`\n"
-            f"💡 *温馨提示: 权限过期后将无法在群组记账*"
+            f"📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}`"
         )
-    # กรณีไม่เป็นลูกค้า หรือ หมดอายุแล้ว
+    # 3. กรณีที่ต้องตอบกลับคนทั่วไป (ถ้าไม่ใส่ส่วนนี้ บอทจะเงียบ)
     else:
-        msg = (
+        await update.message.reply_text(
             "❌ **权限状态: 未激活**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "您目前没有记账权限，或权限已过期。\n\n"
-            "💎 **开通会员享受以下功能:**\n"
-            "• 无限制群组记账\n"
-            "• 自动统计报表\n"
-            "• 成员权限管理\n\n"
-            "👉 **点击这里私聊开通:** @YourBotUsername\n"
-            "然后发送 `/start` 获取付款地址。"
+            "您目前没有使用权限。请私聊机器人发送 /start 获取开通方式。"
         )
-        await update.message.reply_text(msg, parse_mode='Markdown')
         
 async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.message.from_user.id) != str(MASTER_ADMIN): return
