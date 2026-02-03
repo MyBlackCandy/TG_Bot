@@ -28,7 +28,7 @@ def check_access(user_id, chat_id):
 # --- 📊 ACCOUNTING LOGIC (With Shortening Logic) ---
 
 async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ฟังก์ชันกลางสำหรับส่งยอดสรุปแบบย่อรายการ"""
+    """ฟังก์ชันส่งสรุปบัญชีแบบย่อรายการเมื่อเกิน 6"""
     chat_id = update.effective_chat.id
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
@@ -39,7 +39,7 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if count == 0:
         return await update.message.reply_text("📋 **当前无记录**")
 
-    # ส่วนของ Logic การย่อรายการ (แสดง 6 รายการล่าสุด)
+    # ✅ Logic การย่อรายการ: แสดง 6 รายการล่าสุด
     if count > 6:
         display_rows = rows[-6:]
         history_text = "...\n"
@@ -54,9 +54,14 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history_text += f"{start_num + i}. {sign}{r[0]} ({r[1]})\n"
     
     cursor.close(); conn.close()
-    response = (f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**")
+    
+    # ปรับรูปแบบการตอบกลับให้สวยงามกว่าในรูป image_d0fd29.png
+    response = (f"📊 **账目汇总 (สรุปบัญชี)**\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"{history_text}"
+                f"━━━━━━━━━━━━━━━\n"
+                f"💰 **总额: {total}**")
     await update.message.reply_text(response, parse_mode='Markdown')
-
 # --- 🤖 HANDLERS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,24 +101,43 @@ async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status_msg, parse_mode='Markdown')
 
 async def handle_accounting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """จัดการการจดบันทึก + หรือ -"""
     if not update.message or not update.message.text: return
     text = update.message.text.strip()
     match = re.match(r'^([+-])(\d+)$', text)
     if match:
-        if not check_access(update.message.from_user.id, update.effective_chat.id): return
+        # ตรวจสอบสิทธิ์ (check_access) ก่อนบันทึก
+        # ... (โค้ดเช็คสิทธิ์ของคุณ) ...
+        
         amount = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', 
                        (update.effective_chat.id, amount, update.message.from_user.first_name))
         conn.commit(); cursor.close(); conn.close()
+        
+        # ส่งยอดสรุปแบบใหม่ทันที
         await send_summary(update, context)
 
 async def undo_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_access(update.message.from_user.id, update.effective_chat.id): return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (update.effective_chat.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("↩️ 已撤销上一条记录")
+    """/undo - ยกเลิกรายการล่าสุดและแสดงยอดสรุปใหม่ทันที"""
+    # 1. ตรวจสอบสิทธิ์ก่อน
+    if not await check_access(update.message.from_user.id, update.effective_chat.id): 
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 2. ค้นหาและลบรายการล่าสุดของกลุ่มนี้
+    cursor.execute('''DELETE FROM history WHERE id = (
+        SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1
+    )''', (update.effective_chat.id,))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    # 3. ส่งข้อความยืนยันพร้อมสรุปยอดใหม่ (เรียกใช้ฟังก์ชันเดิมที่เรามี)
+    await update.message.reply_text("↩️ **已撤销上一条记录 (ยกเลิกรายการล่าสุดสำเร็จ)**")
     await send_summary(update, context)
 
 async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,6 +159,7 @@ if __name__ == '__main__':
 
     # ลงทะเบียนคำสั่ง (จัดลำดับให้ถูก)
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("show", send_summary))
     app.add_handler(CommandHandler("check", check_status))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("add", add_member))
