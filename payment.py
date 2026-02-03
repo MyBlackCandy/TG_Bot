@@ -6,7 +6,7 @@ from database import get_db_connection
 MY_USDT_ADDR = os.getenv('USDT_ADDRESS')
 
 async def generate_payment_amount(user_id):
-    """กำหนดทศนิยมคงที่ให้ลูกค้าแต่ละคน เริ่มที่ 0.001 และเพิ่มขึ้นเรื่อยๆ"""
+    """กำหนดทศนิยมคงที่ให้ลูกค้าแต่ละคน เริ่มที่ 0.001 เพื่อให้ระบบตรวจสอบได้แม่นยำ"""
     conn = get_db_connection(); cursor = conn.cursor()
     
     # เช็กว่าผู้ใช้รายนี้เคยมีทศนิยมประจำตัวในระบบหรือยัง
@@ -21,9 +21,9 @@ async def generate_payment_amount(user_id):
         max_val = cursor.fetchone()[0] or 0.000
         decimal = float(max_val) + 0.001
     
-    base_price = 100.0  # ราคาพื้นฐาน
+    base_price = 100.0  # ราคาพื้นฐาน 100 USDT
     final_amount = base_price + decimal
-    expire_at = datetime.now() + timedelta(hours=24) # ยอดจองมีอายุ 24 ชม.
+    expire_at = datetime.now() + timedelta(hours=24)
     
     cursor.execute('''INSERT INTO pending_payments (user_id, base_amount, decimal_points, expire_at) 
                    VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) 
@@ -32,7 +32,7 @@ async def generate_payment_amount(user_id):
     return final_amount
 
 async def auto_verify_payment(context):
-    """ตรวจสอบการชำระเงินจาก TronScan อัตโนมัติ (Background Job)"""
+    """ตรวจสอบการชำระเงินจาก TronScan อัตโนมัติ (Background Job) ทุก 60 วินาที"""
     try:
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute('SELECT user_id, (base_amount + decimal_points) FROM pending_payments WHERE expire_at > %s', (datetime.now(),))
@@ -51,9 +51,9 @@ async def auto_verify_payment(context):
                 for tx in data:
                     t_info = tx.get('tokenInfo', {})
                     if t_info.get('symbol') == 'USDT':
-                        # คำนวณยอดเงินที่โอนเข้ามาจริง
-                        actual_amt = float(tx.get('quant', 0)) / (10 ** int(t_info.get('decimals', 6)))
-                        if abs(actual_amt - float(target_amt)) < 0.0001:
+                        # คำนวณยอดเงินที่โอนเข้ามาจริง (แก้บั๊ก tx_amt)
+                        actual_tx_amt = float(tx.get('quant', 0)) / (10 ** int(t_info.get('decimals', 6)))
+                        if abs(actual_tx_amt - float(target_amt)) < 0.0001:
                             # อัปเดตวันหมดอายุ +30 วัน
                             cursor.execute('SELECT expire_date FROM customers WHERE user_id=%s', (uid,))
                             old_exp = cursor.fetchone()
