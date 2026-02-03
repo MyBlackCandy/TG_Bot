@@ -1,4 +1,4 @@
-import os  # ✅ เพิ่มการนำเข้า os เพื่อแก้ปัญหาในภาพ image_c70115.jpg
+import os
 import requests
 from datetime import datetime, timedelta
 from database import get_db_connection
@@ -6,22 +6,24 @@ from database import get_db_connection
 MY_USDT_ADDR = os.getenv('USDT_ADDRESS')
 
 async def generate_payment_amount(user_id):
-    """กำหนดทศนิยมคงที่ให้ลูกค้าแต่ละคน เริ่มที่ 0.001"""
+    """กำหนดทศนิยมคงที่ให้ลูกค้าแต่ละคน เริ่มที่ 0.001 และเพิ่มขึ้นเรื่อยๆ"""
     conn = get_db_connection(); cursor = conn.cursor()
+    
+    # เช็กว่าผู้ใช้รายนี้เคยมีทศนิยมประจำตัวในระบบหรือยัง
     cursor.execute('SELECT decimal_points FROM pending_payments WHERE user_id = %s', (user_id,))
     res = cursor.fetchone()
     
     if res:
         decimal = res[0]
     else:
-        # หาค่าทศนิยมสูงสุดในระบบแล้วบวกเพิ่ม 0.001
+        # ถ้ายังไม่มี ให้หาทศนิยมสูงสุดที่มีในระบบแล้ว + 0.001
         cursor.execute('SELECT MAX(decimal_points) FROM pending_payments')
         max_val = cursor.fetchone()[0] or 0.000
         decimal = float(max_val) + 0.001
     
-    base_price = 100.0
+    base_price = 100.0  # ราคาพื้นฐาน
     final_amount = base_price + decimal
-    expire_at = datetime.now() + timedelta(hours=24)
+    expire_at = datetime.now() + timedelta(hours=24) # ยอดจองมีอายุ 24 ชม.
     
     cursor.execute('''INSERT INTO pending_payments (user_id, base_amount, decimal_points, expire_at) 
                    VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) 
@@ -30,12 +32,14 @@ async def generate_payment_amount(user_id):
     return final_amount
 
 async def auto_verify_payment(context):
-    """ตรวจสอบการชำระเงินอัตโนมัติ (แก้ไขบั๊ก tx_amt จากภาพ image_c597e2.jpg)"""
+    """ตรวจสอบการชำระเงินจาก TronScan อัตโนมัติ (Background Job)"""
     try:
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute('SELECT user_id, (base_amount + decimal_points) FROM pending_payments WHERE expire_at > %s', (datetime.now(),))
         pending = cursor.fetchall()
-        if not pending: return
+        
+        if not pending: 
+            cursor.close(); conn.close(); return
 
         url = "https://apilist.tronscan.org/api/token_trc20/transfers"
         params = {"limit": 20, "direction": "in", "relatedAddress": MY_USDT_ADDR}
@@ -47,16 +51,19 @@ async def auto_verify_payment(context):
                 for tx in data:
                     t_info = tx.get('tokenInfo', {})
                     if t_info.get('symbol') == 'USDT':
-                        # ✅ แก้ไขชื่อตัวแปรให้ตรงกันเพื่อป้องกัน NameError ตามภาพ image_c597e2.jpg
-                        actual_tx_amt = float(tx.get('quant', 0)) / (10 ** int(t_info.get('decimals', 6)))
-                        if abs(actual_tx_amt - float(target_amt)) < 0.0001:
+                        # คำนวณยอดเงินที่โอนเข้ามาจริง
+                        actual_amt = float(tx.get('quant', 0)) / (10 ** int(t_info.get('decimals', 6)))
+                        if abs(actual_amt - float(target_amt)) < 0.0001:
+                            # อัปเดตวันหมดอายุ +30 วัน
                             cursor.execute('SELECT expire_date FROM customers WHERE user_id=%s', (uid,))
-                            old = cursor.fetchone()
-                            base = old[0] if old and old[0] > datetime.now() else datetime.now()
-                            new_exp = base + timedelta(days=30)
+                            old_exp = cursor.fetchone()
+                            start_date = old_exp[0] if old_exp and old_exp[0] > datetime.now() else datetime.now()
+                            new_exp = start_date + timedelta(days=30)
+                            
                             cursor.execute('INSERT INTO customers (user_id, expire_date) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date', (uid, new_exp))
                             cursor.execute('DELETE FROM pending_payments WHERE user_id=%s', (uid,))
                             conn.commit()
-                            await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功!** 到期: `{new_exp.strftime('%Y-%m-%d %H:%M')}`")
+                            await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功! (ชำระเงินสำเร็จ)**\n📅 หมดอายุ: `{new_exp.strftime('%Y-%m-%d %H:%M')}`")
         cursor.close(); conn.close()
-    except: pass
+    except Exception as e:
+        print(f"Payment Verification Error: {e}")
