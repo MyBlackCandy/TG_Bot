@@ -121,7 +121,7 @@ async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exp_cn = db_time.astimezone(CN_TZ)
             await update.message.reply_text(f"✅ **权限状态: 正常**\n📅 **到期:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}` (CN)")
             return
-    await update.message.reply_text("❌ **权限未激活或已过期**\n请私聊 /start 获取支付地址。")
+    await update.message.reply_text("❌ **权限未激活或已过期**\n请私聊 @Mbcd_Acc_bot 输入 /start 获取支付地址。")
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
