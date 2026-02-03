@@ -29,8 +29,13 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection(); cursor = conn.cursor()
-    # ตารางลูกค้าหลัก
-    cursor.execute('CREATE TABLE IF NOT EXISTS customers (user_id BIGINT PRIMARY KEY, expire_date TIMESTAMP WITH TIME ZONE)')
+    # ตารางลูกค้าหลัก (เพิ่มคอลัมน์ username และ first_name)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS customers (
+        user_id BIGINT PRIMARY KEY, 
+        expire_date TIMESTAMP WITH TIME ZONE,
+        username TEXT,
+        first_name TEXT
+    )''')
     # ตารางลูกทีม
     cursor.execute('CREATE TABLE IF NOT EXISTS team_members (member_id BIGINT PRIMARY KEY, leader_id BIGINT, allowed_chat_id BIGINT)')
     # ตารางประวัติบัญชี
@@ -69,12 +74,28 @@ async def auto_verify_task(context: ContextTypes.DEFAULT_TYPE):
                         tx_id = tx['transaction_id']
                         cursor.execute('SELECT 1 FROM used_transactions WHERE tx_id=%s', (tx_id,))
                         if not cursor.fetchone():
+                            # ดึงข้อมูลชื่อจาก Telegram
+                            try:
+                                chat = await context.bot.get_chat(uid)
+                                uname = chat.username
+                                fname = chat.first_name
+                            except:
+                                uname, fname = None, "Unknown"
+
                             cursor.execute('INSERT INTO used_transactions VALUES (%s, %s)', (tx_id, uid))
                             cursor.execute('SELECT expire_date FROM customers WHERE user_id=%s', (uid,))
                             old = cursor.fetchone()
                             base = old[0] if old and old[0] > get_now_cn() else get_now_cn()
                             new_exp = base + timedelta(days=30)
-                            cursor.execute('INSERT INTO customers VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date', (uid, new_exp))
+                            
+                            # อัปเดตข้อมูลพร้อมชื่อ
+                            cursor.execute('''
+                                INSERT INTO customers (user_id, expire_date, username, first_name) 
+                                VALUES (%s, %s, %s, %s) 
+                                ON CONFLICT (user_id) 
+                                DO UPDATE SET expire_date=EXCLUDED.expire_date, username=EXCLUDED.username, first_name=EXCLUDED.first_name
+                            ''', (uid, new_exp, uname, fname))
+                            
                             cursor.execute('DELETE FROM pending_payments WHERE user_id=%s', (uid,))
                             conn.commit()
                             await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功!** 到期时间 (CN): `{new_exp.strftime('%Y-%m-%d %H:%M')}`")
@@ -202,12 +223,22 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.message.from_user.id) != str(MASTER_ADMIN): return
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT user_id, expire_date FROM customers WHERE expire_date > %s ORDER BY expire_date ASC', (get_now_cn(),))
+    # ปรับปรุง SQL เพื่อดึงข้อมูล username และ first_name
+    cursor.execute('SELECT user_id, expire_date, username, first_name FROM customers WHERE expire_date > %s ORDER BY expire_date ASC', (get_now_cn(),))
     rows = cursor.fetchall(); cursor.close(); conn.close()
     if not rows: return await update.message.reply_text("📋 **目前没有活跃会员**")
+    
     msg = "👑 **当前会员列表:**\n━━━━━━━━━━━━━━━━━━━━\n"
     for i, row in enumerate(rows):
-        msg += f"{i+1}. ID: `{row[0]}`\n   📅 到期: `{row[1].astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M')}`\n\n"
+        uid, expire, uname, fname = row
+        uname_display = f"@{uname}" if uname else "无"
+        fname_display = fname if fname else "Unknown"
+        exp_display = expire.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M')
+        
+        msg += (f"{i+1}. 👤 **{fname_display}** ({uname_display})\n"
+                f"   🆔 ID: `{uid}`\n"
+                f"   📅 到期: `{exp_display}`\n\n")
+                
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def set_admin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,10 +246,23 @@ async def set_admin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid, days = int(context.args[0]), int(context.args[1])
         new_exp = get_now_cn() + timedelta(days=days)
+        
+        # พยายามดึงชื่อจาก Telegram
+        try:
+            chat = await context.bot.get_chat(uid)
+            uname, fname = chat.username, chat.first_name
+        except:
+            uname, fname = "Manual_Add", "Manual_Add"
+
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO customers VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date', (uid, new_exp))
+        cursor.execute('''
+            INSERT INTO customers (user_id, expire_date, username, first_name) 
+            VALUES (%s, %s, %s, %s) 
+            ON CONFLICT (user_id) 
+            DO UPDATE SET expire_date=EXCLUDED.expire_date, username=EXCLUDED.username, first_name=EXCLUDED.first_name
+        ''', (uid, new_exp, uname, fname))
         conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"👑 **手动开通成功**\nID: `{uid}`\n到期: `{new_exp.strftime('%Y-%m-%d %H:%M')}` (CN)")
+        await update.message.reply_text(f"👑 **手动开通成功**\n👤 **{fname}**\nID: `{uid}`\n到期: `{new_exp.strftime('%Y-%m-%d %H:%M')}` (CN)")
     except: await update.message.reply_text("格式: `/setadmin [ID] [天数]`")
 
 # --- 💬 MESSAGE HANDLER ---
@@ -242,11 +286,9 @@ if __name__ == '__main__':
     init_db()
     app = Application.builder().token(TOKEN).build()
     
-    # ระบบ Job Queue สำหรับเช็คยอดเงินอัตโนมัติ
     if app.job_queue:
         app.job_queue.run_repeating(auto_verify_task, interval=30, first=10)
     
-    # --- Register Handlers (เรียงลำดับความสำคัญ) ---
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("check", check_status))
@@ -259,7 +301,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("list", list_customers))
     app.add_handler(CommandHandler("setadmin", set_admin_manual))
     
-    # MessageHandler (ต้องอยู่ล่างสุดเสมอ)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     
     app.run_polling()
