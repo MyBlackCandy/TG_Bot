@@ -18,53 +18,54 @@ def get_db_connection():
     url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     return psycopg2.connect(url, sslmode='require')
 
-# --- ฟีเจอร์ /info: แสดงวิธีใช้งาน ---
+# --- ฟีเจอร์ /remove: ลบลูกทีมออกจากกลุ่ม ---
+async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    leader_id = update.message.from_user.id
+    chat_id = update.effective_chat.id
+    
+    # ตรวจสอบว่าคนสั่งคือหัวหน้าทีมหรือไม่
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM customers WHERE user_id = %s AND expire_date > %s', (leader_id, datetime.now()))
+    is_leader = cursor.fetchone() or str(leader_id) == str(MASTER_ADMIN)
+    
+    if not is_leader:
+        await update.message.reply_text("❌ เฉพาะหัวหน้าทีมเท่านั้นที่ลบลูกทีมได้")
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text("💡 **วิธีใช้:** Reply ข้อความของลูกทีมแล้วพิมพ์ `/remove` เพื่อยกเลิกสิทธิ์")
+        return
+
+    target = update.message.reply_to_message.from_user
+    # ลบข้อมูลลูกทีมคนนี้ออกจากกลุ่มนี้
+    cursor.execute('DELETE FROM team_members WHERE member_id = %s AND allowed_chat_id = %s', (target.id, chat_id))
+    conn.commit()
+    cursor.close(); conn.close()
+    
+    await update.message.reply_text(f"🚫 ยกเลิกสิทธิ์ `{target.first_name}` เรียบร้อย! (ไม่สามารถใช้งานบอทในกลุ่มนี้ได้แล้ว)")
+
+# --- ฟีเจอร์ /info: อัปเดตเมนูใหม่ ---
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
-    
-    # ข้อความพื้นฐานสำหรับทุกคน
     text = "📖 **AK Robot - วิธีใช้งาน**\n\n"
     text += "🔢 **การบันทึกยอด:**\n"
-    text += "• พิมพ์ `+เลข` (เช่น +100) เพื่อเพิ่มยอด\n"
-    text += "• พิมพ์ `-เลข` (เช่น -50) เพื่อลดยอด\n\n"
-    
+    text += "• พิมพ์ `+เลข` หรือ `-เลข` เพื่อบันทึก\n\n"
     text += "🎮 **คำสั่งทั่วไป:**\n"
-    text += "• /undo - ยกเลิกรายการล่าสุดที่เพิ่งพิมพ์ผิด\n"
-    text += "• /info - ดูวิธีใช้งานทั้งหมดนี้\n\n"
-
-    # ข้อความสำหรับหัวหน้าทีม (Customer)
+    text += "• /undo - ยกเลิกรายการล่าสุด\n"
+    text += "• /info - ดูวิธีใช้งานทั้งหมด\n\n"
     text += "👤 **สำหรับหัวหน้าทีม:**\n"
-    text += "• /add - (Reply ลูกทีม) เพื่อเพิ่มลูกทีมเข้ากลุ่มนี้\n"
-    text += "• /reset - ล้างประวัติยอดทั้งหมดในกลุ่มเป็น 0\n\n"
+    text += "• /add - (Reply ลูกทีม) เพื่อเพิ่มสิทธิ์\n"
+    text += "• /remove - (Reply ลูกทีม) เพื่อ **ลบสิทธิ์**\n"
+    text += "• /reset - ล้างยอดทั้งหมดในกลุ่ม\n"
 
-    # ข้อความพิเศษสำหรับคุณ (Master Admin)
     if user_id == str(MASTER_ADMIN):
-        text += "👑 **Master Admin Only:**\n"
-        text += "• /setadmin [วัน] - (Reply ลูกค้า) เพื่อเปิดสิทธิ์หัวหน้าทีม\n"
+        text += "\n👑 **Master Admin Only:**\n"
+        text += "• /setadmin [วัน] - (Reply ลูกค้า) เพื่อเปิดสิทธิ์หัวหน้า\n"
     
     await update.message.reply_text(text, parse_mode='Markdown')
 
-# --- ฟีเจอร์ /undo: ยกเลิกรายการล่าสุด ---
-async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    chat_id = update.effective_chat.id
-    if not check_access(user_id, chat_id): return
+# --- ส่วนอื่นๆ (ระบบจัดการเดิม) ---
 
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT id, amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1', (chat_id,))
-    last_item = cursor.fetchone()
-
-    if last_item:
-        item_id, amount, name = last_item
-        cursor.execute('DELETE FROM history WHERE id = %s', (item_id,))
-        conn.commit()
-        symbol = "+" if amount > 0 else ""
-        await update.message.reply_text(f"↩️ **ยกเลิกสำเร็จ!**\nลบรายการ: {symbol}{amount} ({name}) ออกแล้ว")
-    else:
-        await update.message.reply_text("❌ ไม่พบรายการที่จะยกเลิก")
-    cursor.close(); conn.close()
-
-# --- ส่วนอื่นๆ (คงเดิม) ---
 def init_db():
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS customers (user_id BIGINT PRIMARY KEY, expire_date TIMESTAMP)')
@@ -141,6 +142,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("info", info))
     app.add_handler(CommandHandler("setadmin", set_admin))
     app.add_handler(CommandHandler("add", add_member))
+    app.add_handler(CommandHandler("remove", remove_member)) # เพิ่มคำสั่งลบลูกทีม
     app.add_handler(CommandHandler("undo", undo))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc))
