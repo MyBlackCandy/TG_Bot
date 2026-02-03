@@ -29,7 +29,7 @@ def get_db_connection():
 
 def init_db():
     conn = get_db_connection(); cursor = conn.cursor()
-    # ตารางลูกค้าหลัก (เพิ่มคอลัมน์ username และ first_name)
+    # ตารางลูกค้าหลัก (มีฟิลด์เก็บชื่อและ Username)
     cursor.execute('''CREATE TABLE IF NOT EXISTS customers (
         user_id BIGINT PRIMARY KEY, 
         expire_date TIMESTAMP WITH TIME ZONE,
@@ -40,14 +40,13 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS team_members (member_id BIGINT PRIMARY KEY, leader_id BIGINT, allowed_chat_id BIGINT)')
     # ตารางประวัติบัญชี
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, chat_id BIGINT, amount INTEGER, user_name TEXT, timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)')
-    # ตารางป้องกันการใช้ TxID ซ้ำ
+    # ตารางป้องกัน TxID ซ้ำ
     cursor.execute('CREATE TABLE IF NOT EXISTS used_transactions (tx_id TEXT PRIMARY KEY, user_id BIGINT)')
     # ตารางรายการรอชำระเงิน
     cursor.execute('CREATE TABLE IF NOT EXISTS pending_payments (user_id BIGINT PRIMARY KEY, amount DECIMAL, expire_at TIMESTAMP WITH TIME ZONE)')
     conn.commit(); cursor.close(); conn.close()
 
 def check_access(user_id, chat_id):
-    """ตรวจสอบสิทธิ์การใช้งานบอทในกลุ่ม"""
     if str(user_id) == str(MASTER_ADMIN): return True
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT 1 FROM customers WHERE user_id = %s AND expire_date > %s', (user_id, get_now_cn()))
@@ -74,28 +73,21 @@ async def auto_verify_task(context: ContextTypes.DEFAULT_TYPE):
                         tx_id = tx['transaction_id']
                         cursor.execute('SELECT 1 FROM used_transactions WHERE tx_id=%s', (tx_id,))
                         if not cursor.fetchone():
-                            # ดึงข้อมูลชื่อจาก Telegram
                             try:
                                 chat = await context.bot.get_chat(uid)
-                                uname = chat.username
-                                fname = chat.first_name
+                                uname, fname = chat.username, chat.first_name
                             except:
-                                uname, fname = None, "Unknown"
-
+                                uname, fname = None, "User"
+                            
                             cursor.execute('INSERT INTO used_transactions VALUES (%s, %s)', (tx_id, uid))
                             cursor.execute('SELECT expire_date FROM customers WHERE user_id=%s', (uid,))
                             old = cursor.fetchone()
                             base = old[0] if old and old[0] > get_now_cn() else get_now_cn()
                             new_exp = base + timedelta(days=30)
                             
-                            # อัปเดตข้อมูลพร้อมชื่อ
-                            cursor.execute('''
-                                INSERT INTO customers (user_id, expire_date, username, first_name) 
-                                VALUES (%s, %s, %s, %s) 
-                                ON CONFLICT (user_id) 
-                                DO UPDATE SET expire_date=EXCLUDED.expire_date, username=EXCLUDED.username, first_name=EXCLUDED.first_name
-                            ''', (uid, new_exp, uname, fname))
-                            
+                            cursor.execute('''INSERT INTO customers (user_id, expire_date, username, first_name) VALUES (%s, %s, %s, %s) 
+                                           ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date, username=EXCLUDED.username, first_name=EXCLUDED.first_name''', 
+                                           (uid, new_exp, uname, fname))
                             cursor.execute('DELETE FROM pending_payments WHERE user_id=%s', (uid,))
                             conn.commit()
                             await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功!** 到期时间 (CN): `{new_exp.strftime('%Y-%m-%d %H:%M')}`")
@@ -116,50 +108,72 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
            f"• **金额:** `{amt:.2f}` USDT\n"
            f"• **地址:** `{MY_USDT_ADDR}`\n"
            f"• **有效期:** 15 分钟 (至 {exp.strftime('%H:%M')})\n"
-           "系统将自动检测激活，输入/check 在次确认时间。输入 /help 查看指令。")
+           "系统将自动秒入账。输入 /check 查看状态，输入 /help 查看指令。")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     if str(uid) == str(MASTER_ADMIN):
         return await update.message.reply_text("👑 **身份: 系统主管理员**\n🌟 **状态: 永久有效**")
-    
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
-    
     if res and res[0] > get_now_cn():
         exp_cn = res[0].astimezone(CN_TZ)
-        await update.message.reply_text(f"✅ **您的权限状态: 正常**\n📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}`")
+        await update.message.reply_text(f"✅ **您的权限状态: 正常**\n📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}` (CN)")
     else:
-        await update.message.reply_text("❌ **权限状态: 未激活**\n━━━━━━━━━━━━━━━━━━━━\n您目前没有使用权限。请私聊发送 /start 获取开通方式。")
+        await update.message.reply_text("❌ **权限状态: 未激活**\n━━━━━━━━━━━━━━━━━━━━\n您目前没有使用权限。请私聊发送 /start 获取地址。")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    is_master = str(update.message.from_user.id) == str(MASTER_ADMIN)
     msg = (
-        "📖 **黑糖果记账机器人 - 完整使用指南**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "📊 **1. 群组记账指令 (Daily Accounting)**\n"
-        "• **记录收入:** 直接输入 `+金额` (例: `+1000`)\n"
-        "• **记录支出:** 直接输入 `-金额` (例: `-500`)\n"
-        "• **查看账单:** 输入 `/show` (显示最近5条记录及总额)\n"
-        "• **撤销记录:** 输入 `/undo` (删除最后一条错误记录)\n\n"
-        
-        "👥 **2. 成员管理 (Group Management)**\n"
-        "*组长需通过回复(Reply)成员消息来操作:*\n"
-        "• **授权成员:** 回复成员消息 + `/add` \n"
-        "• **取消授权:** 回复成员消息 + `/remove` \n"
-        "• **清空记录:** 输入 `/reset` (⚠️ 慎用！将清空全群账目)\n\n"
-        
-        "💳 **3. 个人权限与工具 (Status & Tools)**\n"
-        "• **查询到期:** 输入 `/check` 查看权限剩余时间\n"
-        "• **查询 ID:** 输入 `/id` 获取用户和群组的 ID\n"
-        "• **开通权限:** 私聊发送 `/start` 获取付款地址\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 **温馨提示:** \n"
-        "1. 系统采用 **GMT+8 北京时间** 进行计算。\n"
-        "2. 转账请务必包含 **精准小数点金额**，系统将自动秒入账，无需截图。"
+        "📖 **黑糖果记账机器人 - 完整指南**\n━━━━━━━━━━━━━━━━━━━━\n"
+        "📊 **1. 记账指令 (群内):** `+金额` / `-金额` \n"
+        "📈 **2. 查看账单:** `/show` / `/undo` (撤销)\n"
+        "👥 **3. 成员管理:** `/add` / `/remove` (回复人)\n"
+        "💳 **4. 权限查询:** `/check` / `/id` \n"
     )
+    if is_master:
+        msg += "━━━━━━━━━━━━━━━━━━━━\n👑 **Admin Only:**\n• `/list` : 会员列表\n• `/setadmin [ID] [天]` : 开通\n• `/deladmin [ID]` : 彻底删除"
     await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT user_id, expire_date, username, first_name FROM customers WHERE expire_date > %s ORDER BY expire_date ASC', (get_now_cn(),))
+    rows = cursor.fetchall(); cursor.close(); conn.close()
+    if not rows: return await update.message.reply_text("📋 **目前没有活跃会员**")
+    msg = "👑 **活跃会员列表:**\n━━━━━━━━━━━━━━━━━━━━\n"
+    for i, row in enumerate(rows):
+        uname = f"@{row[2]}" if row[2] else "无"
+        msg += f"{i+1}. 👤 **{row[3]}** ({uname})\n   🆔: `{row[0]}` | 📅: `{row[1].astimezone(CN_TZ).strftime('%m-%d %H:%M')}`\n\n"
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def del_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
+    try:
+        uid = int(context.args[0])
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute('DELETE FROM customers WHERE user_id = %s', (uid,))
+        cursor.execute('DELETE FROM team_members WHERE leader_id = %s', (uid,))
+        conn.commit(); cursor.close(); conn.close()
+        await update.message.reply_text(f"🗑 **已从数据库彻底删除 ID:** `{uid}`")
+    except: await update.message.reply_text("格式: `/deladmin [ID]`")
+
+async def set_admin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
+    try:
+        uid, days = int(context.args[0]), int(context.args[1])
+        new_exp = get_now_cn() + timedelta(days=days)
+        try:
+            chat = await context.bot.get_chat(uid)
+            uname, fname = chat.username, chat.first_name
+        except: uname, fname = "Manual", "User"
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute('INSERT INTO customers VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date, username=EXCLUDED.username, first_name=EXCLUDED.first_name', (uid, new_exp, uname, fname))
+        conn.commit(); cursor.close(); conn.close()
+        await update.message.reply_text(f"👑 **手动开通成功**\n👤: {fname} | 到期: `{new_exp.strftime('%Y-%m-%d')}`")
+    except: await update.message.reply_text("格式: `/setadmin [ID] [天数]`")
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -169,30 +183,35 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = cursor.fetchall(); cursor.close(); conn.close()
     if not rows: return await update.message.reply_text("📋 **当前无记录**")
     total, count = sum(r[0] for r in rows), len(rows)
-    if count > 6:
-        display = rows[-5:]; history_text = "...\n" + "\n".join([f"{count-4+i}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(display)])
-    else:
-        history_text = "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows)])
+    history_text = "...\n" + "\n".join([f"{count-4+i}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows[-5:])]) if count > 6 else "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows)])
     await update.message.reply_text(f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}\n━━━━━━━━━━━━━━━\n💰 **总额: {total}**", parse_mode='Markdown')
 
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text: return
+    text = update.message.text.strip()
+    match = re.match(r'^([+-])(\d+)$', text)
+    if match:
+        if not check_access(update.message.from_user.id, update.effective_chat.id): return
+        amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (update.effective_chat.id, amt, update.message.from_user.first_name))
+        conn.commit(); cursor.close(); conn.close()
+        await show_history(update, context)
+
+# --- (Functions: get_my_id, undo, reset, add/remove_member omitted for brevity, but should be included) ---
 async def get_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
-    msg = (f"🆔 **Telegram ID 信息**\n━━━━━━━━━━━━━━━\n"
-           f"👤 **用户:** {user.first_name}\n"
-           f"🔢 **User ID:** `{user.id}`\n")
-    if chat.type != 'private':
-        msg += f"🏰 **Chat ID:** `{chat.id}`\n"
-    msg += "━━━━━━━━━━━━━━━\n💡 *长按 ID 可复制*"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    msg = f"🆔 **Telegram ID 信息**\n━━━━━━━━━━━━━━━\n👤 **用户:** {user.first_name}\n🔢 **User ID:** `{user.id}`\n"
+    if chat.type != 'private': msg += f"🏰 **Chat ID:** `{chat.id}`\n"
+    await update.message.reply_text(msg + "━━━━━━━━━━━━━━━\n💡 *长按 ID 可复制*", parse_mode='Markdown')
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if not check_access(update.message.from_user.id, chat_id): return
+    if not check_access(update.message.from_user.id, update.effective_chat.id): return
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (chat_id,))
+    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (update.effective_chat.id,))
     conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("↩️ **已撤销记录 / Undo Done**")
+    await update.message.reply_text("↩️ **已撤销记录**")
     await show_history(update, context)
 
 async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,7 +219,7 @@ async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('DELETE FROM history WHERE chat_id = %s', (update.effective_chat.id,))
     conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("🧹 **账目已清空 / Reset Done**")
+    await update.message.reply_text("🧹 **账目已清空**")
 
 async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message: return await update.message.reply_text("⚠️ 请回复成员以授权")
@@ -212,7 +231,7 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ **授权成功:** {t.first_name}")
 
 async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message: return await update.message.reply_text("⚠️ 请回复成员以取消授权")
+    if not update.message.reply_to_message: return await update.message.reply_text("⚠️ 请回复成员以取消")
     if not check_access(update.message.from_user.id, update.effective_chat.id): return
     t = update.message.reply_to_message.from_user
     conn = get_db_connection(); cursor = conn.cursor()
@@ -220,87 +239,17 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit(); cursor.close(); conn.close()
     await update.message.reply_text(f"🚫 **已取消授权:** {t.first_name}")
 
-async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
-    conn = get_db_connection(); cursor = conn.cursor()
-    # ปรับปรุง SQL เพื่อดึงข้อมูล username และ first_name
-    cursor.execute('SELECT user_id, expire_date, username, first_name FROM customers WHERE expire_date > %s ORDER BY expire_date ASC', (get_now_cn(),))
-    rows = cursor.fetchall(); cursor.close(); conn.close()
-    if not rows: return await update.message.reply_text("📋 **目前没有活跃会员**")
-    
-    msg = "👑 **当前会员列表:**\n━━━━━━━━━━━━━━━━━━━━\n"
-    for i, row in enumerate(rows):
-        uid, expire, uname, fname = row
-        uname_display = f"@{uname}" if uname else "无"
-        fname_display = fname if fname else "Unknown"
-        exp_display = expire.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M')
-        
-        msg += (f"{i+1}. 👤 **{fname_display}** ({uname_display})\n"
-                f"   🆔 ID: `{uid}`\n"
-                f"   📅 到期: `{exp_display}`\n\n")
-                
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def set_admin_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
-    try:
-        uid, days = int(context.args[0]), int(context.args[1])
-        new_exp = get_now_cn() + timedelta(days=days)
-        
-        # พยายามดึงชื่อจาก Telegram
-        try:
-            chat = await context.bot.get_chat(uid)
-            uname, fname = chat.username, chat.first_name
-        except:
-            uname, fname = "Manual_Add", "Manual_Add"
-
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO customers (user_id, expire_date, username, first_name) 
-            VALUES (%s, %s, %s, %s) 
-            ON CONFLICT (user_id) 
-            DO UPDATE SET expire_date=EXCLUDED.expire_date, username=EXCLUDED.username, first_name=EXCLUDED.first_name
-        ''', (uid, new_exp, uname, fname))
-        conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"👑 **手动开通成功**\n👤 **{fname}**\nID: `{uid}`\n到期: `{new_exp.strftime('%Y-%m-%d %H:%M')}` (CN)")
-    except: await update.message.reply_text("格式: `/setadmin [ID] [天数]`")
-
-# --- 💬 MESSAGE HANDLER ---
-async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
-    text = update.message.text.strip()
-    chat_id = update.effective_chat.id
-    
-    # ดักจับยอดเงิน (+100, -50)
-    match = re.match(r'^([+-])(\d+)$', text)
-    if match:
-        if not check_access(update.message.from_user.id, chat_id): return
-        amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (chat_id, amt, update.message.from_user.first_name))
-        conn.commit(); cursor.close(); conn.close()
-        await show_history(update, context)
-
 # --- 🚀 RUN BOT ---
 if __name__ == '__main__':
     init_db()
     app = Application.builder().token(TOKEN).build()
+    if app.job_queue: app.job_queue.run_repeating(auto_verify_task, interval=30, first=10)
     
-    if app.job_queue:
-        app.job_queue.run_repeating(auto_verify_task, interval=30, first=10)
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("check", check_status))
-    app.add_handler(CommandHandler("id", get_my_id))
-    app.add_handler(CommandHandler("show", show_history))
-    app.add_handler(CommandHandler("undo", undo))
-    app.add_handler(CommandHandler("reset", reset_history))
-    app.add_handler(CommandHandler("add", add_member))
-    app.add_handler(CommandHandler("remove", remove_member))
-    app.add_handler(CommandHandler("list", list_customers))
-    app.add_handler(CommandHandler("setadmin", set_admin_manual))
+    # Register Commands
+    for cmd, func in [("start", start), ("help", help_command), ("check", check_status), ("id", get_my_id), 
+                     ("show", show_history), ("undo", undo), ("reset", reset_history), ("add", add_member), 
+                     ("remove", remove_member), ("list", list_customers), ("deladmin", del_admin), ("setadmin", set_admin_manual)]:
+        app.add_handler(CommandHandler(cmd, func))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-    
     app.run_polling()
