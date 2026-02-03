@@ -41,17 +41,13 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sign = "+" if r[0] > 0 else ""
         history_text += f"{start_num + i}. {sign}{r[0]} ({r[1]})\n"
     
-    cursor.close(); conn.close()
-    msg = f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**"
-    report_url = f"https://your-domain.com/report.php?c={chat_id}"
-    
-    # สร้างปุ่ม Inline Keyboard
-    keyboard = [[InlineKeyboardButton("📊 点击跳转完整账单 (ดูรายงานละเอียด)", url=report_url)]]
+    # ✅ ปุ่มกดดูรายงานออนไลน์ (ส่ง Chat ID ไปทาง URL)
+    keyboard = [[InlineKeyboardButton("📊 点击跳转完整账单 (ดูรายงานฉบับเต็ม)", url=f"{BASE_WEB_URL}/index.php?c={chat_id}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # ส่งข้อความพร้อมปุ่ม
+
+    cursor.close(); conn.close()
     await update.message.reply_text(
-        text=f"📊 **账目汇总**\n...", 
+        f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
