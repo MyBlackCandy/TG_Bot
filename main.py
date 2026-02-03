@@ -85,7 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute('INSERT INTO pending_payments VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET amount=EXCLUDED.amount, expire_at=EXCLUDED.expire_at', (update.message.from_user.id, amt, exp))
     conn.commit(); cursor.close(); conn.close()
     msg = (f"🚀 **黑糖果机器人管理系统**\n━━━━━━━━━━━━━━━\n"
-           f"💳 **金额:** `{amt:.2f}` USDT (TRC-20)\n"
+           f"💳 **金额:** `{amt:.2f}` USDT (TRC-20)：使用期 30天\n"
            f"🏦 **地址:** `{MY_USDT_ADDR}`\n"
            f"⏰ **有效期:** 15 分钟 (至 {exp.strftime('%H:%M')})\n"
            "系统将自动激活\n"
