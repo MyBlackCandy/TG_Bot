@@ -71,7 +71,7 @@ async def auto_verify_task(context: ContextTypes.DEFAULT_TYPE):
                             cursor.execute('INSERT INTO customers VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date', (uid, new_exp))
                             cursor.execute('DELETE FROM pending_payments WHERE user_id=%s', (uid,))
                             conn.commit()
-                            await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功 / Success!**\n到期时间 (CN): `{new_exp.strftime('%Y-%m-%d %H:%M')}`")
+                            await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功 / Success!**\n到期时间(北京时间): `{new_exp.strftime('%Y-%m-%d %H:%M')}`")
         cursor.close(); conn.close()
     except: pass
 
