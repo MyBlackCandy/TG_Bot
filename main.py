@@ -104,16 +104,55 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
            "输入 /check 确认状态，/help 查看指令。")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+# --- 🤖 FUNCTIONS (วางไว้ก่อนส่วนลงทะเบียน Handler) ---
+
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if str(uid) == str(MASTER_ADMIN): return await update.message.reply_text("👑 **身份: 主管理员**\n🌟 **状态: 永久有效**")
+    
+    # 1. กรณีเป็นแอดมินหลัก (Master Admin)
+    if str(uid) == str(MASTER_ADMIN):
+        return await update.message.reply_text("👑 **身份: 系统主管理员**\n🌟 **状态: 永久有效**")
+    
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
+    
+    # 2. กรณีเป็นสมาชิกและยังไม่หมดอายุ
     if res and res[0] > get_now_cn():
         exp_cn = res[0].astimezone(CN_TZ)
-        await update.message.reply_text(f"✅ **您的权限状态: 正常**\n📅 **到期:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}` (CN)")
-    else: await update.message.reply_text("❌ **权限未激活**\n请私聊 /start 获取支付地址。")
+        await update.message.reply_text(
+            f"✅ **您的权限状态: 正常**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}` (北京时间)"
+        )
+    # 3. กรณีไม่ใช่สมาชิก หรือ หมดอายุแล้ว (ต้องมีส่วนนี้บอทถึงจะตอบกลับคนทั่วไป)
+    else:
+        await update.message.reply_text(
+            "❌ **权限状态: 未激活**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "您目前没有使用权限。请私聊机器人发送 /start 获取开通方式。"
+        )
+
+# --- 🚀 ส่วนการลงทะเบียน Handler (ต้องเรียงลำดับแบบนี้!) ---
+
+if __name__ == '__main__':
+    init_db()
+    app = Application.builder().token(TOKEN).build()
+    
+    # 1. ลงทะเบียนคำสั่ง (CommandHandler) ทั้งหมดก่อนเสมอ
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check_status))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("id", get_my_id))
+    app.add_handler(CommandHandler("show", show_history))
+    app.add_handler(CommandHandler("list", list_customers))
+    app.add_handler(CommandHandler("deladmin", del_admin))
+    app.add_handler(CommandHandler("setadmin", set_admin_manual))
+    
+    # 2. MessageHandler ต้องอยู่ล่างสุด เพื่อไม่ให้ไปแย่งงานจากคำสั่งด้านบน
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+    
+    app.run_polling()
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_master = str(update.message.from_user.id) == str(MASTER_ADMIN)
