@@ -173,15 +173,38 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if str(uid) == str(MASTER_ADMIN): return await update.message.reply_text("👑 **身份: 主管理员 (永久)**")
+    # กรณี Master Admin
+    if str(uid) == str(MASTER_ADMIN): 
+        return await update.message.reply_text("👑 **身份: 系统主管理员**\n🌟 **状态: 永久有效**")
+    
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
+    
+    # กรณีเป็นลูกค้าและยังไม่หมดอายุ
     if res and res[0] > get_now_cn():
         exp_cn = res[0].astimezone(CN_TZ)
-        await update.message.reply_text(f"✅ **状态: 正常**\n📅 **到期 (CN):** `{exp_cn.strftime('%Y-%m-%d %H:%M')}`")
-    else: await update.message.reply_text("❌ **权限已过期**")
-
+        await update.message.reply_text(
+            f"✅ **您的权限状态: 正常**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}`\n"
+            f"💡 *温馨提示: 权限过期后将无法在群组记账*"
+        )
+    # กรณีไม่เป็นลูกค้า หรือ หมดอายุแล้ว
+    else:
+        msg = (
+            "❌ **权限状态: 未激活**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "您目前没有记账权限，或权限已过期。\n\n"
+            "💎 **开通会员享受以下功能:**\n"
+            "• 无限制群组记账\n"
+            "• 自动统计报表\n"
+            "• 成员权限管理\n\n"
+            "👉 **点击这里私聊开通:** @YourBotUsername\n"
+            "然后发送 `/start` 获取付款地址。"
+        )
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
 async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.message.from_user.id) != str(MASTER_ADMIN): return
     conn = get_db_connection(); cursor = conn.cursor()
