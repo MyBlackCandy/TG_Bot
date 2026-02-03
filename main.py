@@ -19,111 +19,117 @@ def get_db_connection():
     url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     return psycopg2.connect(url, sslmode='require')
 
-# --- [ใหม่] ฟังก์ชันเช็คสิทธิ์และวันหมดอายุ ---
-async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+def init_db():
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (user_id,))
-    res = cursor.fetchone()
-    cursor.close(); conn.close()
+    cursor.execute('CREATE TABLE IF NOT EXISTS customers (user_id BIGINT PRIMARY KEY, expire_date TIMESTAMP)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS team_members (member_id BIGINT PRIMARY KEY, leader_id BIGINT, allowed_chat_id BIGINT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, chat_id BIGINT, amount INTEGER, user_name TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS used_transactions (tx_id TEXT PRIMARY KEY, user_id BIGINT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS pending_payments (user_id BIGINT PRIMARY KEY, amount DECIMAL, expire_at TIMESTAMP)')
+    conn.commit(); cursor.close(); conn.close()
 
-    if res:
-        expire_date = res[0]
-        if expire_date > datetime.now():
-            await update.message.reply_text(
-                f"✅ **您的权限状态: 有效**\n📅 **到期时间:** `{expire_date.strftime('%Y-%m-%d %H:%M')}`\n\n"
-                "如果您需要延长权限，请在私聊中输入 /start 获取新的转账单。", parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text("❌ **您的权限已过期**\n请在私聊中输入 /start 重新续费。")
-    else:
-        await update.message.reply_text("❓ **您目前没有组长权限**\n请私聊机器人并输入 /start 开通权限。")
+# --- UTILS ---
+def check_access(user_id, chat_id):
+    if str(user_id) == str(MASTER_ADMIN): return True
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM customers WHERE user_id = %s AND expire_date > %s', (user_id, datetime.now()))
+    is_customer = cursor.fetchone()
+    if is_customer: 
+        cursor.close(); conn.close(); return True
+    cursor.execute('SELECT 1 FROM team_members WHERE member_id = %s AND allowed_chat_id = %s', (user_id, chat_id))
+    res = cursor.fetchone(); cursor.close(); conn.close()
+    return True if res else False
 
-# --- [ใหม่] ระบบตรวจสอบยอดอัตโนมัติ (ไม่ต้องรอ /verify) ---
-async def auto_verify_task(context: ContextTypes.DEFAULT_TYPE):
-    """ฟังก์ชันวนลูปตรวจสอบ Blockchain อัตโนมัติทุก 30 วินาที"""
-    while True:
-        try:
-            conn = get_db_connection(); cursor = conn.cursor()
-            cursor.execute('SELECT user_id, amount, expire_at FROM pending_payments WHERE expire_at > NOW()')
-            pending_list = cursor.fetchall()
-
-            if pending_list:
-                # ดึงข้อมูลธุรกรรมล่าสุดจาก Blockchain
-                url = f"https://api.trongrid.io/v1/accounts/{MY_USDT_ADDR}/transactions/trc20"
-                params = {"limit": 20, "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"}
-                headers = {"TRON-PRO-API-KEY": TRON_API_KEY} if TRON_API_KEY else {}
-                response = requests.get(url, params=params, headers=headers).json()
-                
-                for user_id, expected_amount, expire_at in pending_list:
-                    for tx in response.get('data', []):
-                        tx_amt = int(tx['value']) / 1_000_000
-                        if abs(tx_amt - float(expected_amount)) < 0.0001:
-                            tx_id = tx['transaction_id']
-                            # เช็คว่า TXID นี้ใช้ไปหรือยัง
-                            cursor.execute('SELECT 1 FROM used_transactions WHERE tx_id = %s', (tx_id,))
-                            if not cursor.fetchone():
-                                # พบรายการโอนที่ถูกต้อง! ทำการเปิดสิทธิ์
-                                cursor.execute('INSERT INTO used_transactions VALUES (%s, %s)', (tx_id, user_id))
-                                cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (user_id,))
-                                old = cursor.fetchone()
-                                new_exp = (old[0] if old and old[0] > datetime.now() else datetime.now()) + timedelta(days=30)
-                                
-                                cursor.execute('INSERT INTO customers VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date', (user_id, new_exp))
-                                cursor.execute('DELETE FROM pending_payments WHERE user_id = %s', (user_id,))
-                                conn.commit()
-
-                                # แจ้งเตือนลูกค้าอัตโนมัติ
-                                await context.bot.send_message(
-                                    chat_id=user_id,
-                                    text=f"✅ **支付成功！系统已自动确认**\n您的组长权限已开通/续费。\n📅 **有效期至:** `{new_exp.strftime('%Y-%m-%d %H:%M')}`\n\n您可以开始使用机器人管理您的群组了！",
-                                    parse_mode='Markdown'
-                                )
-                                # แจ้งเตือน Master Admin
-                                if MASTER_ADMIN:
-                                    await context.bot.send_message(chat_id=MASTER_ADMIN, text=f"💰 **系统自动确认收款!**\n🆔 User ID: `{user_id}`\n💵 金额: `{expected_amount:.2f}` USDT")
-            
-            cursor.close(); conn.close()
-        except Exception as e:
-            print(f"Auto-Verify Error: {e}")
-        
-        await asyncio.sleep(30) # เช็คทุก 30 วินาที
-
-# --- 修改 /start (เอาคำแนะนำ /verify ออก เพราะระบบเป็น Auto แล้ว) ---
+# --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != 'private': return
     amt = 100 + (random.randint(1, 99) / 100)
     exp = datetime.now() + timedelta(minutes=15)
-
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('INSERT INTO pending_payments VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET amount=EXCLUDED.amount, expire_at=EXCLUDED.expire_at', (update.message.from_user.id, amt, exp))
     conn.commit(); cursor.close(); conn.close()
-
-    msg = (
-        "🚀 **欢迎使用 AK 机器人管理系统**\n"
-        "----------------------------------\n"
-        f"💰 **待支付金额:** `{amt:.2f}` USDT (TRC-20)\n"
-        f"🏦 **收款地址:** `{MY_USDT_ADDR}`\n"
-        f"⏰ **请在 15 分钟内完成转账**\n"
-        "----------------------------------\n"
-        "📢 **无需手动确认:**\n"
-        "转账完成后，系统将在 1 分钟内自动通过区块链验证并为您开启权限。\n\n"
-        "🔍 **查询状态:** 输入 /check 查看您的到期时间。"
-    )
+    msg = f"🚀 **欢迎使用管理系统**\n💰 **金额:** `{amt:.2f}` USDT (TRC-20)\n🏦 `{MY_USDT_ADDR}`\n⏰ 15分钟内转账，系统将自动激活。"
     await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (user_id,))
+    res = cursor.fetchone(); cursor.close(); conn.close()
+    if res and res[0] > datetime.now():
+        await update.message.reply_text(f"✅ **状态: 有效**\n📅 **到期:** `{res[0].strftime('%Y-%m-%d %H:%M')}`", parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ **权限已过期或未开通**")
+
+async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.reply_to_message: return
+    leader_id = update.message.from_user.id
+    chat_id = update.effective_chat.id
+    if not check_access(leader_id, chat_id): return
+    target = update.message.reply_to_message.from_user
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('INSERT INTO team_members VALUES (%s, %s, %s) ON CONFLICT (member_id) DO UPDATE SET allowed_chat_id=EXCLUDED.allowed_chat_id', (target.id, leader_id, chat_id))
+    conn.commit(); cursor.close(); conn.close()
+    await update.message.reply_text(f"✅ 已授权组员: {target.first_name}")
+
+async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if not check_access(update.message.from_user.id, chat_id): return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (chat_id,))
+    conn.commit(); cursor.close(); conn.close()
+    await update.message.reply_text("↩️ 已撤回最后一条记录")
+
+async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text: return
+    chat_id = update.effective_chat.id
+    if not check_access(update.message.from_user.id, chat_id): return
+    match = re.match(r'^([+-])(\d+)$', update.message.text.strip())
+    if match:
+        amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (chat_id, amt, update.message.from_user.first_name))
+        conn.commit()
+        cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
+        rows = cursor.fetchall(); cursor.close(); conn.close()
+        total = sum(r[0] for r in rows)
+        res = f"📋 记录\n" + "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows[-10:])]) + f"\n💰 总金额: {total}"
+        await update.message.reply_text(res)
+
+# --- AUTO VERIFY TASK ---
+async def auto_verify_task(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute('SELECT user_id, amount FROM pending_payments WHERE expire_at > NOW()')
+        pending = cursor.fetchall()
+        if pending:
+            url = f"https://api.trongrid.io/v1/accounts/{MY_USDT_ADDR}/transactions/trc20"
+            data = requests.get(url, params={"limit": 20}, headers={"TRON-PRO-API-KEY": TRON_API_KEY} if TRON_API_KEY else {}).json()
+            for uid, amt in pending:
+                for tx in data.get('data', []):
+                    if abs((int(tx['value'])/1000000) - float(amt)) < 0.0001:
+                        cursor.execute('SELECT 1 FROM used_transactions WHERE tx_id=%s', (tx['transaction_id'],))
+                        if not cursor.fetchone():
+                            cursor.execute('INSERT INTO used_transactions VALUES (%s, %s)', (tx['transaction_id'], uid))
+                            cursor.execute('SELECT expire_date FROM customers WHERE user_id=%s', (uid,))
+                            old = cursor.fetchone()
+                            new_exp = (old[0] if old and old[0] > datetime.now() else datetime.now()) + timedelta(days=30)
+                            cursor.execute('INSERT INTO customers VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET expire_date=EXCLUDED.expire_date', (uid, new_exp))
+                            cursor.execute('DELETE FROM pending_payments WHERE user_id=%s', (uid,))
+                            conn.commit()
+                            await context.bot.send_message(chat_id=uid, text=f"✅ **支付成功!** 到期: `{new_exp.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
+        cursor.close(); conn.close()
+    except: pass
 
 # --- MAIN ---
 if __name__ == '__main__':
+    init_db()
     app = Application.builder().token(TOKEN).build()
-    
-    # เพิ่มระบบวนลูปอัตโนมัติเข้าไปในบอท
-    job_queue = app.job_queue
-    app.job_queue.run_repeating(auto_verify_task, interval=30, first=10)
-
+    if app.job_queue:
+        app.job_queue.run_repeating(auto_verify_task, interval=30, first=10)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_status)) # คำสั่งเช็คสิทธิ์
+    app.add_handler(CommandHandler("check", check_status))
     app.add_handler(CommandHandler("add", add_member))
     app.add_handler(CommandHandler("undo", undo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc))
-    
     app.run_polling()
