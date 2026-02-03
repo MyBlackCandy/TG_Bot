@@ -179,15 +179,41 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🚫 **已取消授权:** {t.first_name}")
 
 async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
+    user_id = update.message.from_user.id
+    
+    # ตรวจสอบว่าเป็นแอดมินหลักหรือไม่
+    if str(user_id) != str(MASTER_ADMIN):
+        # หากไม่ใช่แอดมิน ให้แจ้งเตือน (ช่วยให้รู้ว่าบอทไม่ได้เสีย แต่เราไม่มีสิทธิ์)
+        return await update.message.reply_text("❌ **权限不足:** 只有主管理员可以使用此指令。")
+    
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT user_id, expire_date, username, first_name FROM customers WHERE expire_date > %s ORDER BY expire_date ASC', (get_now_cn(),))
+    # ดึงรายชื่อสมาชิกทุกคน (ทั้งที่ยังไม่หมดอายุ และที่หมดอายุแล้วเพื่อให้แอดมินเห็นภาพรวม)
+    cursor.execute('''
+        SELECT user_id, expire_date, username, first_name 
+        FROM customers 
+        ORDER BY expire_date DESC
+    ''')
     rows = cursor.fetchall(); cursor.close(); conn.close()
-    if not rows: return await update.message.reply_text("📋 **目前没有活跃会员**")
-    msg = "👑 **会员列表:**\n━━━━━━━━━━━━━━━━━━━━\n"
+    
+    if not rows:
+        return await update.message.reply_text("📋 **数据库内暂无会员记录**")
+    
+    msg = "👑 **会员管理列表 (Master Admin)**\n━━━━━━━━━━━━━━━━━━━━\n"
+    now = get_now_cn()
+    
     for i, row in enumerate(rows):
-        uname = f"@{row[2]}" if row[2] else "无"
-        msg += f"{i+1}. 👤 **{row[3]}** ({uname})\n   🆔: `{row[0]}` | 📅: `{row[1].astimezone(CN_TZ).strftime('%m-%d %H:%M')}`\n\n"
+        uid, expire, uname, fname = row
+        status = "✅ 正常" if expire > now else "❌ 已过期"
+        uname_display = f"@{uname}" if uname else "无"
+        fname_display = fname if fname else "Unknown"
+        exp_str = expire.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M')
+        
+        msg += (f"{i+1}. 👤 **{fname_display}** ({uname_display})\n"
+                f"   状态: {status}\n"
+                f"   🆔 ID: `{uid}`\n"
+                f"   📅 到期: `{exp_str}`\n\n")
+    
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n📊 总计: {len(rows)} 位会员"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def del_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
