@@ -141,62 +141,59 @@ async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_id = update.message.from_user.id
-    
-    # ตรวจสอบสิทธิ์ (Master Admin หรือ ผู้มีสิทธิ์ในกลุ่ม)
-    if not check_access(user_id, chat_id): return
+    if not check_access(update.message.from_user.id, chat_id): return
     
     conn = get_db_connection(); cursor = conn.cursor()
-    
-    # 1. ลบรายการล่าสุดของกลุ่มนี้
-    cursor.execute('''
-        DELETE FROM history 
-        WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)
-    ''', (chat_id,))
+    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (chat_id,))
     conn.commit()
     
-    # 2. ดึงรายการที่เหลือ 10 รายการล่าสุดมาแสดงผลใหม่
-    cursor.execute('''
-        SELECT amount, user_name 
-        FROM history 
-        WHERE chat_id = %s 
-        ORDER BY timestamp ASC
-    ''', (chat_id,))
-    rows = cursor.fetchall()
-    
-    # 3. คำนวณยอดรวมใหม่
+    cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
+    rows = cursor.fetchall(); cursor.close(); conn.close()
     total = sum(r[0] for r in rows)
     
-    # 4. สร้างข้อความตอบกลับภาษาจีน
+    # --- ระบบย่อรายการ (มากกว่า 6 รายการ) ---
     if not rows:
         res = "↩️ **已撤销最后一条记录**\n━━━━━━━━━━━━━━━\n📋 **当前无任何记录**\n💰 **总金额: 0**"
     else:
-        history_text = "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows[-10:])])
-        res = (
-            "↩️ **已撤销最后一条记录**\n"
-            "━━━━━━━━━━━━━━━\n"
-            f"📋 **最新记录 (更新后):**\n{history_text}\n"
-            "━━━━━━━━━━━━━━━\n"
-            f"💰 **当前总金额: {total}**"
-        )
-    
-    cursor.close(); conn.close()
+        count = len(rows)
+        if count > 6:
+            display_rows = rows[-5:]
+            history_text = "...\n" + "\n".join([f"{count-4+i}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(display_rows)])
+        else:
+            history_text = "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows)])
+            
+        res = f"↩️ **已撤销最后一条记录**\n━━━━━━━━━━━━━━━\n{history_text}\n━━━━━━━━━━━━━━━\n💰 **总金额: {total}**"
+        
     await update.message.reply_text(res, parse_mode='Markdown')
 
 async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    if not check_access(update.message.from_user.id, update.effective_chat.id): return
+    chat_id = update.effective_chat.id
+    if not check_access(update.message.from_user.id, chat_id): return
+    
     match = re.match(r'^([+-])(\d+)$', update.message.text.strip())
     if match:
         amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (update.effective_chat.id, amt, update.message.from_user.first_name))
+        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (chat_id, amt, update.message.from_user.first_name))
         conn.commit()
-        cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (update.effective_chat.id,))
+        
+        cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
         rows = cursor.fetchall(); cursor.close(); conn.close()
         total = sum(r[0] for r in rows)
-        res = "📋 记录\n" + "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows[-10:])]) + f"\n💰 总额: {total}"
-        await update.message.reply_text(res)
+        
+        # --- ระบบย่อรายการ (มากกว่า 6 รายการ) ---
+        count = len(rows)
+        if count > 6:
+            # แสดง 5 รายการล่าสุด
+            display_rows = rows[-5:]
+            history_text = "...\n" + "\n".join([f"{count-4+i}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(display_rows)])
+        else:
+            # แสดงทั้งหมดถ้าไม่เกิน 6
+            history_text = "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows)])
+            
+        res = f"📋 **账目记录**\n━━━━━━━━━━━━━━━\n{history_text}\n━━━━━━━━━━━━━━━\n💰 **总金额: {total}**"
+        await update.message.reply_text(res, parse_mode='Markdown')
 
 # --- 🚀 RUN BOT ---
 if __name__ == '__main__':
