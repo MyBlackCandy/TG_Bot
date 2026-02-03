@@ -4,6 +4,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from database import init_db, get_db_connection
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # ดึงค่าแอดมินหลักจาก Environment Variable (ต้องตั้งใน Railway)
 MASTER_ADMIN = os.getenv('ADMIN_ID')
@@ -42,7 +43,18 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     cursor.close(); conn.close()
     msg = f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    report_url = f"https://your-domain.com/report.php?c={chat_id}"
+    
+    # สร้างปุ่ม Inline Keyboard
+    keyboard = [[InlineKeyboardButton("📊 点击跳转完整账单 (ดูรายงานละเอียด)", url=report_url)]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # ส่งข้อความพร้อมปุ่ม
+    await update.message.reply_text(
+        text=f"📊 **账目汇总**\n...", 
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 # --- 🤖 คำสั่งบอท ---
 
