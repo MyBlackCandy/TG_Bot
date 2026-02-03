@@ -50,24 +50,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute('INSERT INTO pending_payments VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET amount=EXCLUDED.amount, expire_at=EXCLUDED.expire_at', (update.message.from_user.id, amt, exp))
     conn.commit(); cursor.close(); conn.close()
     
-    msg = (f"🚀 **AK 机器人管理系统**\n━━━━━━━━━━━━━━━\n"
-           f"💰 **金额/Amt:** `{amt:.2f}` USDT (TRC-20)\n"
-           f"🏦 **地址/Addr:** `{MY_USDT_ADDR}`\n"
-           f"⏰ **有效期/Expire:** 15 Min\n"
-           "系统将自动激活。 / Auto-Verify enabled.")
+    msg = (f"🚀 **黑糖果记账机器人**\n━━━━━━━━━━━━━━━\n"
+           f"💰 **金额:** `{amt:.2f}` USDT (TRC-20)\n"
+           f"🏦 **地址:** `{MY_USDT_ADDR}`\n"
+           f"⏰ **有效期:** 15 分钟\n"
+           "系统将自动激活。.\n"
+           "使用方式：`/help`"
+          )
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "📖 **AK 机器人详细使用指南**\n"
+        "📖 **黑糖果机器人详细使用指南**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📊 **1. 日常记账 (群组内)**\n"
         "• 记录收入: `+1000` | 支出: `-500` \n"
         "• 查看账单: `/show` \n"
         "• 撤销错误: `/undo` \n\n"
-        "👑 **2. 组长管理 (回复成员)**\n"
-        "• 授权成员: `/add` \n"
-        "• 取消授权: `/remove` \n"
+        "👑 **2. 组长管理 **\n"
+        "• 授权成员: 先让组员发信息到群里，然后输入`/add`来回复组员信息\n"
+        "• 取消授权: 先让组员发信息到群里，然后输入`/remove`来回复组员信息\n"
         "• 清空账目: `/reset` \n\n"
         "💳 **3. 权限查询**\n"
         "• 查询到期: `/check` \n\n"
