@@ -102,12 +102,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• **记录支出:** 直接输入 `-金额` (例: `-500`)\n"
         "• **查看账单:** 输入 `/show` (显示最近5条记录及总额)\n"
         "• **撤销记录:** 输入 `/undo` (删除最后一条错误记录)\n\n"
+        "• **清空记录:** 输入 `/reset` (⚠️ 慎用！将清空全群账目)\n\n"
         
         "👥 **2. 成员管理 (Group Management)**\n"
         "*组长需通过回复(Reply)成员消息来操作:*\n"
         "• **授权成员:** 回复成员消息 + `/add` \n"
         "• **取消授权:** 回复成员消息 + `/remove` \n"
-        "• **清空记录:** 输入 `/reset` (⚠️ 慎用！将清空全群账目)\n\n"
+        
         
         "💳 **3. 个人权限与工具 (Status & Tools)**\n"
         "• **查询到期:** 输入 `/check` 查看权限剩余时间\n"
