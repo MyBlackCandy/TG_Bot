@@ -88,7 +88,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
            f"💳 **金额:** `{amt:.2f}` USDT (TRC-20)\n"
            f"🏦 **地址:** `{MY_USDT_ADDR}`\n"
            f"⏰ **有效期:** 15 分钟 (至 {exp.strftime('%H:%M')})\n"
-           "系统将自动激活。/ Auto-Verify enabled.")
+           "系统将自动激活\n"
+           "查询开通：/check\n"
+           "帮住:/help\n")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
