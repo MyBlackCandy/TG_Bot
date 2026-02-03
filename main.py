@@ -101,7 +101,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• **记录收入:** 直接输入 `+金额` (例: `+1000`)\n"
         "• **记录支出:** 直接输入 `-金额` (例: `-500`)\n"
         "• **查看账单:** 输入 `/show` (显示最近5条记录及总额)\n"
-        "• **撤销记录:** 输入 `/undo` (删除最后一条错误记录)\n\n"
+        "• **撤销记录:** 输入 `/undo` (删除最后一条错误记录)\n"
         "• **清空记录:** 输入 `/reset` (⚠️ 慎用！将清空全群账目)\n\n"
         
         "👥 **2. 成员管理 (Group Management)**\n"
