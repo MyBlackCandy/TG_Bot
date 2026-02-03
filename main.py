@@ -108,8 +108,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    
-    # 1. กรณีเป็นแอดมินหลัก (Master Admin)
     if str(uid) == str(MASTER_ADMIN):
         return await update.message.reply_text("👑 **身份: 系统主管理员**\n🌟 **状态: 永久有效**")
     
@@ -117,21 +115,19 @@ async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
     
-    # 2. กรณีเป็นสมาชิกและยังไม่หมดอายุ
-    if res and res[0] > get_now_cn():
-        exp_cn = res[0].astimezone(CN_TZ)
-        await update.message.reply_text(
-            f"✅ **您的权限状态: 正常**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 **到期时间:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}` (北京时间)"
-        )
-    # 3. กรณีไม่ใช่สมาชิก หรือ หมดอายุแล้ว (ต้องมีส่วนนี้บอทถึงจะตอบกลับคนทั่วไป)
-    else:
-        await update.message.reply_text(
-            "❌ **权限状态: 未激活**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "您目前没有使用权限。请私聊机器人发送 /start 获取开通方式。"
-        )
+    # แก้ไขจุดที่ทำให้ Crash: ตรวจสอบและจัดการ Timezone ให้ตรงกัน
+    if res and res[0]:
+        db_time = res[0]
+        # บังคับให้เป็น CST (GMT+8) หากไม่มีข้อมูลโซน
+        if db_time.tzinfo is None:
+            db_time = db_time.replace(tzinfo=CN_TZ)
+            
+        if db_time > get_now_cn():
+            exp_cn = db_time.astimezone(CN_TZ)
+            await update.message.reply_text(f"✅ **您的权限状态: 正常**\n📅 **到期:** `{exp_cn.strftime('%Y-%m-%d %H:%M')}` (CN)")
+            return
+
+    await update.message.reply_text("❌ **权限未激活**\n请私聊 /start 获取支付地址。")
 
 # --- 🚀 ส่วนการลงทะเบียน Handler (ต้องเรียงลำดับแบบนี้!) ---
 
