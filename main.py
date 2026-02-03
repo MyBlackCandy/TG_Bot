@@ -8,6 +8,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # ดึงค่าแอดมินหลักจาก Environment Variable (ต้องตั้งใน Railway)
 MASTER_ADMIN = os.getenv('ADMIN_ID')
+# ✅ ใช้โดเมนที่ได้จาก Railway (จากภาพ d4a03c)
+BASE_WEB_URL = "https://tgbot-production-d541.up.railway.app"
 
 # --- 🛡️ ฟังก์ชันตรวจสอบสิทธิ์ ---
 async def check_access(user_id, chat_id):
