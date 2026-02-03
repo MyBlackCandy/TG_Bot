@@ -88,6 +88,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• **金额:** `{amt:.2f}` USDT (TRC-20)\n"
         f"• **地址:** `{MY_USDT_ADDR}`\n"
         f"• **有效期:** 15 分钟内转账自动激活\n\n"
+        f"• **开通查询:/check\n\n"
         
         f"📖 **使用方法简述 (Quick Guide):**\n"
         f"1️⃣ **记账:** 直接发送 `+100` 或 `-50` 进行记录\n"
@@ -104,19 +105,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "📖 **黑糖果机器人详细指南 | Manual**\n"
+        "📖 **AK 机器人完整使用指南 | Manual**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "📊 **1. 日常记账 (群组内)**\n"
-        "• 记录收入: `+1000` | 支出: `-500` \n"
-        "• 查看账单: `/show` | 撤销: `/undo` \n\n"
-        "👑 **2. 成员管理 (回复使用)**\n"
-        "• 授权: `/add` | 取消: `/remove` \n"
-        "• 重置: `/reset` (清空全群记录)\n\n"
-        "💳 **3. 权限与 ID**\n"
-        "• 查询到期: `/check` \n"
-        "• **查询 ID: `/id`** \n"
+        "📊 **1. 日常记账 (群组内 / Group)**\n"
+        "• **记录收入:** 输入 `+金额` (例: `+1000`)\n"
+        "• **记录支出:** 输入 `-金额` (例: `-500`)\n"
+        "• **查看账单:** `/show` (显示最近5条及总额)\n"
+        "• **撤销记录:** `/undo` (删除最后一条)\n\n"
+        
+        "👥 **2. 成员管理 (组长回复使用 / Reply)**\n"
+        "• **授权成员:** 回复成员消息并输入 `/add` \n"
+        "• **取消授权:** 回复成员消息并输入 `/remove` \n"
+        "• **清空记录:** `/reset` (慎用！清空全群账目)\n\n"
+        
+        "💳 **3. 权限与工具 (私聊/群组)**\n"
+        "• **开通权限:** 私聊发送 `/start` 获取转账地址\n"
+        "• **查询到期:** `/check` 查看您的权限剩余时间\n"
+        "• **查询 ID:** `/id` 获取用户和群组的 ID 数字\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🛠 **Admin:** `/setadmin [ID] [Days]`"
+        "💡 **温馨提示:** 系统采用区块链自动验证，转账请务必包含精准的小数点金额，无需人工审核即可自动激活。"
     )
     await update.message.reply_text(msg, parse_mode='Markdown')
 
