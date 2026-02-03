@@ -139,11 +139,48 @@ async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧹 **本群账目已重置。**")
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_access(update.message.from_user.id, update.effective_chat.id): return
+    chat_id = update.effective_chat.id
+    user_id = update.message.from_user.id
+    
+    # ตรวจสอบสิทธิ์ (Master Admin หรือ ผู้มีสิทธิ์ในกลุ่ม)
+    if not check_access(user_id, chat_id): return
+    
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (update.effective_chat.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("↩️ 已撤销最后一条记录")
+    
+    # 1. ลบรายการล่าสุดของกลุ่มนี้
+    cursor.execute('''
+        DELETE FROM history 
+        WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)
+    ''', (chat_id,))
+    conn.commit()
+    
+    # 2. ดึงรายการที่เหลือ 10 รายการล่าสุดมาแสดงผลใหม่
+    cursor.execute('''
+        SELECT amount, user_name 
+        FROM history 
+        WHERE chat_id = %s 
+        ORDER BY timestamp ASC
+    ''', (chat_id,))
+    rows = cursor.fetchall()
+    
+    # 3. คำนวณยอดรวมใหม่
+    total = sum(r[0] for r in rows)
+    
+    # 4. สร้างข้อความตอบกลับภาษาจีน
+    if not rows:
+        res = "↩️ **已撤销最后一条记录**\n━━━━━━━━━━━━━━━\n📋 **当前无任何记录**\n💰 **总金额: 0**"
+    else:
+        history_text = "\n".join([f"{i+1}. {('+' if r[0]>0 else '')}{r[0]} ({r[1]})" for i, r in enumerate(rows[-10:])])
+        res = (
+            "↩️ **已撤销最后一条记录**\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"📋 **最新记录 (更新后):**\n{history_text}\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"💰 **当前总金额: {total}**"
+        )
+    
+    cursor.close(); conn.close()
+    await update.message.reply_text(res, parse_mode='Markdown')
 
 async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
