@@ -135,36 +135,33 @@ async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 🚀 ส่วนการลงทะเบียน Handler (ต้องเรียงลำดับแบบนี้!) ---
 
-if __name__ == '__main__':
-    init_db()
-    app = Application.builder().token(TOKEN).build()
-    
-    # 1. ลงทะเบียนคำสั่ง (CommandHandler) ทั้งหมดก่อนเสมอ
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_status))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("id", get_my_id))
-    app.add_handler(CommandHandler("show", show_history))
-    app.add_handler(CommandHandler("list", list_customers))
-    app.add_handler(CommandHandler("deladmin", del_admin))
-    app.add_handler(CommandHandler("setadmin", set_admin_manual))
-    
-    # 2. MessageHandler ต้องอยู่ล่างสุด เพื่อไม่ให้ไปแย่งงานจากคำสั่งด้านบน
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-    
-    app.run_polling()
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    is_master = str(update.message.from_user.id) == str(MASTER_ADMIN)
     msg = (
-        "📖 **黑糖果机器人 - 使用指南**\n━━━━━━━━━━━━━━━━━━━━\n"
-        "📊 **1. 记账 (群内):** `+金额` / `-金额` \n"
-        "📈 **2. 账单:** `/show` / `/undo` (撤销)\n"
-        "👥 **3. 成员:** `/add` / `/remove` (回复人)\n"
-        "💳 **4. 权限:** `/check` / `/id` | **清空:** `/reset` \n"
+        "📖 **黑糖果记账机器人 - 完整使用指南**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📊 **1. 群组记账指令 (Daily Accounting)**\n"
+        "• **记录收入:** 直接输入 `+金额` (例: `+1000`)\n"
+        "• **记录支出:** 直接输入 `-金额` (例: `-500`)\n"
+        "• **查看账单:** 输入 `/show` (显示最近5条记录及总额)\n"
+        "• **撤销记录:** 输入 `/undo` (删除最后一条错误记录)\n\n"
+        
+        "👥 **2. 成员管理 (Group Management)**\n"
+        "*组长需通过回复(Reply)成员消息来操作:*\n"
+        "• **授权成员:** 回复成员消息 + `/add` \n"
+        "• **取消授权:** 回复成员消息 + `/remove` \n"
+        "• **清空记录:** 输入 `/reset` (⚠️ 慎用！将清空全群账目)\n\n"
+        
+        "💳 **3. 个人权限与工具 (Status & Tools)**\n"
+        "• **查询到期:** 输入 `/check` 查看权限剩余时间\n"
+        "• **查询 ID:** 输入 `/id` 获取用户和群组的 ID\n"
+        "• **开通权限:** 私聊发送 `/start` 获取付款地址\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 **温馨提示:** \n"
+        "1. 系统采用 **GMT+8 北京时间** 进行计算。\n"
+        "2. 转账请务必包含 **精准小数点金额**，系统将自动秒入账，无需截图。"
     )
-    if is_master:
-        msg += "━━━━━━━━━━━━━━━━━━━━\n👑 **Admin Only:**\n• `/list` : 会员列表\n• `/setadmin [ID] [天]` : 开通\n• `/deladmin [ID]` : 删除"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,13 +294,18 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     init_db()
     app = Application.builder().token(TOKEN).build()
-    if app.job_queue: app.job_queue.run_repeating(auto_verify_task, interval=30, first=10)
     
-    # Handlers Priority
-    for cmd, func in [("start", start), ("help", help_command), ("check", check_status), ("id", get_my_id), 
-                     ("show", show_history), ("undo", undo), ("reset", reset_history), ("add", add_member), 
-                     ("remove", remove_member), ("list", list_customers), ("deladmin", del_admin), ("setadmin", set_admin_manual)]:
-        app.add_handler(CommandHandler(cmd, func))
+    # 1. ลงทะเบียนคำสั่ง (CommandHandler) ทั้งหมดก่อนเสมอ
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check_status))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("id", get_my_id))
+    app.add_handler(CommandHandler("show", show_history))
+    app.add_handler(CommandHandler("list", list_customers))
+    app.add_handler(CommandHandler("deladmin", del_admin))
+    app.add_handler(CommandHandler("setadmin", set_admin_manual))
     
+    # 2. MessageHandler ต้องอยู่ล่างสุด เพื่อไม่ให้ไปแย่งงานจากคำสั่งด้านบน
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+    
     app.run_polling()
