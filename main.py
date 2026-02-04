@@ -39,21 +39,45 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     chat_id = update.effective_chat.id
     now_local = get_local_time(chat_id); today_str = now_local.strftime('%Y-%m-%d')
     conn = get_db_connection(); cursor = conn.cursor()
+    
     cursor.execute("""
         SELECT amount, user_name, (timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval) as local_ts 
         FROM history WHERE chat_id = %s 
         AND TO_CHAR(timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval, 'YYYY-MM-DD') = %s 
         ORDER BY timestamp ASC
     """, (chat_id, chat_id, chat_id, today_str))
+    
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
-    history_text = "📋 รายการของวันนี้:\n" if show_all else ("...\n" if count > 6 else "")
-    for i, r in enumerate(display_rows):
-        num = (count - len(display_rows) + i + 1)
-        history_text += f"{num}. {r[2].strftime('%H:%M')} | {'+' if r[0] > 0 else ''}{r[0]} ({r[1]})\n"
-    cursor.close(); conn.close()
-    await update.message.reply_text(f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **ยอดรวม: {total}**", parse_mode='Markdown')
 
+    # หัวตาราง (ใช้ Code Block เพื่อให้เป็นตัวอักษรความกว้างคงที่)
+    history_text = "```\n"
+    history_text += f"{'#'.ljust(3)} {'时间'.ljust(5)} {'金额'.ljust(8)} {'姓名'}\n"
+    history_text += "--------------------------\n"
+
+    if not show_all and count > 6:
+        history_text += "...\n"
+
+    for i, r in enumerate(display_rows):
+        num = str((count - len(display_rows) + i + 1)).ljust(3)
+        time_str = r[2].strftime('%H:%M').ljust(5)
+        amount_str = f"{'+' if r[0] > 0 else ''}{r[0]}".ljust(8)
+        user_name = r[1]
+        history_text += f"{num} {time_str} {amount_str} {user_name}\n"
+    
+    history_text += "```" # ปิด Code Block
+    
+    cursor.close(); conn.close()
+    
+    response_msg = (
+        f"🍎 **今日账目 ({today_str})**\n"
+        f"{history_text}"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 **ยอดรวม: `{total}`**"
+    )
+    
+    await update.message.reply_text(response_msg, parse_mode='MarkdownV2')
+    
 # --- 🤖 5. คำสั่งจัดการบัญชี (Accounting) ---
 async def help_cmd(update, context):
     msg = ("📖 **Black Candy Help (ละเอียด)**\n━━━━━━━━━━━━━━━\n"
