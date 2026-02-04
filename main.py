@@ -62,17 +62,18 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
 
     cursor.close(); conn.close()
     await update.message.reply_text(
-        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **ยอดรวม: {total}**",
+        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**",
         parse_mode='Markdown'
     )
     
 # --- 🤖 5. คำสั่งจัดการบัญชี (Accounting) ---
 async def help_cmd(update, context):
     msg = ("📖 **Black Candy Help (ละเอียด)**\n━━━━━━━━━━━━━━━\n"
-           "💰 **การบันทึก:** พิมพ์ `+100` หรือ `-50` บอทจะจดเวลาและชื่อคนพิมพ์ให้ทันที\n\n"
-           "⚙️ **บัญชี:**\n• `/bot` : ดูยอดสรุปและรายการล่าสุด\n• `/undo` : ลบรายการล่าสุด\n• `/reset` : ล้างรายการทั้งหมดของวันนี้\n• `/showall` : ดูรายการทั้งหมดแบบไม่ย่อ\n• `/settime [+/-เลข]` : ตั้งโซนเวลา (เช่น `/settime +7`)\n\n"
-           "👥 **ทีมงาน:**\n• `/add` : เพิ่มคนจด (Reply คนนั้น)\n• `/addlist` : ดูรายชื่อคนจดในกลุ่ม\n• `/resetadd` : ลบคนจดทั้งหมดในกลุ่ม\n\n"
-           "👑 **Admin:**\n• `/check` : เช็ค ID และเวลาที่เหลือ (ละเอียดถึงนาที)\n• `/setadmin [วัน]` : เพิ่มวันแอดมิน (สะสมวันได้)\n• `/setlist` : ดูรายชื่อแอดมินทั้งหมด")
+           "💰 **การบันทึก:** พิมพ์ `+100` หรือ `-50` 机器人会自动登记，但是需要是授权者或者是操作者\n\n"
+           "⚙️ **บัญชี:**\n• `/bot` : 查看目前账单（呼叫机器人）\n• `/undo` : 撤销上一项登记\n• `/reset` : 清除今天所有登记\n• `/showall` : 查看所有登记\n• `/settime [+/-เลข]` : 设置登记账单时间 (例如 `/settime +8`)\n\n"
+           "👥 **ทีมงาน:**\n• `/add` : 增加操作人（线让需要增加的人在群里随便发一个信息，然后有权限的人回复 `/add`\n• `/addlist` : 查看操作者名单\n• `/resetadd` : 清除所有操作者\n\n"
+           "👑 **Admin:**\n• `/check` : 查看权限及可用期\n")
+           #• `/setadmin [天]` : เพิ่มวันแอดมิน (สะสมวันได้)\n• `/setlist` : ดูรายชื่อแอดมินทั้งหมด")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def undo_last(update, context):
@@ -80,7 +81,7 @@ async def undo_last(update, context):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (update.effective_chat.id,))
     conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("↩️ ลบรายการล่าสุดเรียบร้อย")
+    await update.message.reply_text("↩️ 已撤销登记")
     await send_summary(update, context)
 
 async def reset_day(update, context):
@@ -89,7 +90,7 @@ async def reset_day(update, context):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("DELETE FROM history WHERE chat_id = %s AND TO_CHAR(timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval, 'YYYY-MM-DD') = %s", (chat_id, chat_id, today_str))
     conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text(f"🗑️ ล้างรายการของวันที่ `{today_str}` เรียบร้อยแล้ว")
+    await update.message.reply_text(f"🗑️ 已清理 `{today_str}` 记录")
 
 async def set_time(update, context):
     if not await is_allowed(update): return
@@ -99,8 +100,8 @@ async def set_time(update, context):
         cursor.execute("INSERT INTO chat_settings (chat_id, timezone) VALUES (%s, %s) ON CONFLICT (chat_id) DO UPDATE SET timezone = EXCLUDED.timezone", (update.effective_chat.id, tz))
         conn.commit(); cursor.close(); conn.close()
         new_time = get_local_time(update.effective_chat.id)
-        await update.message.reply_text(f"✅ ตั้งโซนเวลาสำเร็จ! เวลาบอทตอนนี้: `{new_time.strftime('%H:%M:%S')}`")
-    except: await update.message.reply_text("ใช้: `/settime +7` หรือ `/settime -8` ")
+        await update.message.reply_text(f"✅ 已设置时间! `{new_time.strftime('%H:%M:%S')}`")
+    except: await update.message.reply_text("用: `/settime +8` 或者 `/settime -8` ")
 
 # --- 👥 6. จัดการทีมงาน (Team Members) ---
 async def add_member(update, context):
@@ -111,15 +112,15 @@ async def add_member(update, context):
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute("INSERT INTO team_members VALUES (%s, %s, %s) ON CONFLICT (member_id, chat_id) DO UPDATE SET username = EXCLUDED.username", (target, update.effective_chat.id, name))
         conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"✅ เพิ่มคุณ {name} เป็นคนจดเรียบร้อย")
-    else: await update.message.reply_text("⚠️ โปรดใช้วิธี Reply ข้อความของคนที่จะเพิ่มแล้วพิมพ์ /add")
+        await update.message.reply_text(f"✅ 增加 {name} 成操作者")
+    else: await update.message.reply_text("⚠️ 用回复的方式来设置，用`/add`来回复需要设置的人 ")
 
 async def add_list(update, context):
     if not await is_allowed(update): return
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("SELECT username, member_id FROM team_members WHERE chat_id = %s", (update.effective_chat.id,))
     rows = cursor.fetchall(); cursor.close(); conn.close()
-    msg = "👥 **คนที่มีสิทธิ์จดในกลุ่มนี้:**\n" + "\n".join([f"{i+1}. {r[0]} (`{r[1]}`)" for i, r in enumerate(rows)]) if rows else "ℹ️ ไม่มีรายชื่อคนจด"
+    msg = "👥 **操作者名单:**\n" + "\n".join([f"{i+1}. {r[0]} (`{r[1]}`)" for i, r in enumerate(rows)]) if rows else "ℹ️ 没有设置操作者"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def reset_add(update, context):
@@ -127,20 +128,20 @@ async def reset_add(update, context):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("DELETE FROM team_members WHERE chat_id = %s", (update.effective_chat.id,))
     conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("🗑️ ล้างรายชื่อคนจดทั้งหมดในกลุ่มนี้แล้ว")
+    await update.message.reply_text("🗑️ 已清除所有操作者")
 
 # --- 👑 7. ระบบ Admin & MASTER (Privileged) ---
 async def check_status(update, context):
     uid = update.effective_user.id; conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT expire_date FROM admins WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
-    if str(uid) == str(MASTER_ADMIN): msg = f"🆔 ID: `{uid}`\n👑 สถานะ: **MASTER ADMIN (ถาวร)**"
+    if str(uid) == str(MASTER_ADMIN): msg = f"🆔 用户编号：`{uid}`\n👑 权限等级：**最高管理员（永久有效）**"
     elif res:
         rem = res[0] - datetime.utcnow()
         if rem.total_seconds() > 0:
-            msg = f"🆔 ID: `{uid}`\n⏳ เหลือ: `{rem.days} วัน {rem.seconds // 3600} ชม. {(rem.seconds // 60) % 60} นาที`"
-        else: msg = f"🆔 ID: `{uid}`\n❌ สถานะ: **หมดอายุ**"
-    else: msg = f"🆔 ID: `{uid}`\n❌ คุณไม่มีสิทธิ์เข้าถึงระบบแอดมิน"
+            msg = f"🆔 用户编号: `{uid}`\n⏳ 权限等级:管理员 可用 `{rem.days} 天 {rem.seconds // 3600} 小时 {(rem.seconds // 60) % 60} 分钟`"
+        else: msg = f"🆔 用户编号: `{uid}`\n❌ 权限等级:管理员 **已过期**"
+    else: msg = f"🆔 用户编号: `{uid}`\n❌ 权限等级:没有开通"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def set_admin(update, context):
@@ -152,8 +153,8 @@ async def set_admin(update, context):
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute("INSERT INTO admins (user_id, expire_date) VALUES (%s, CURRENT_TIMESTAMP + interval '%s day') ON CONFLICT (user_id) DO UPDATE SET expire_date = GREATEST(admins.expire_date, CURRENT_TIMESTAMP) + interval '%s day'", (target_id, days, days))
         conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"👑 เพิ่มวัน ID `{target_id}` อีก `{days}` วัน (สะสมเรียบร้อย)")
-    except: await update.message.reply_text("ใช้: `/setadmin [ID] [วัน]` หรือ Reply แล้วใส่จำนวนวัน")
+        await update.message.reply_text(f"🆔 用户编号 `{target_id}` \t已增加 `{days}` 天使用期")
+    except: await update.message.reply_text("用: `/setadmin [ID] [天]` 或者用回复的方式然后输入天数")
 
 async def set_list(update, context):
     if str(update.effective_user.id) != str(MASTER_ADMIN): return
