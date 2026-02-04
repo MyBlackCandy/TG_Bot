@@ -29,6 +29,23 @@ def get_local_time(chat_id, utc_time=None):
         
     cursor.close(); conn.close()
     return utc_time + timedelta(hours=offset)
+    
+    # --- 🔄 2. Internal Sync Function (The Core) ---
+async def register_group_if_not_exists(chat_id, context: ContextTypes.DEFAULT_TYPE):
+    """ฟังก์ชันอัปเดตข้อมูลกลุ่มเข้า DB ทันที"""
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM chat_settings WHERE chat_id = %s', (chat_id,))
+    if cursor.fetchone() is None:
+        try:
+            # พยายามดึงชื่อกลุ่มเพื่อความถูกต้อง
+            chat = await context.bot.get_chat(chat_id)
+            title = chat.title or "Private/Unknown"
+            cursor.execute('INSERT INTO chat_settings (chat_id, timezone) VALUES (%s, 0)', (chat_id,))
+            conn.commit()
+            logging.info(f"✨ Auto-Synced New Group: {title} ({chat_id})")
+        except Exception as e:
+            logging.error(f"⚠️ Sync Error for {chat_id}: {e}")
+    cursor.close(); conn.close()
 
 # --- 🛡️ 3. Access Control (Global Master & Admin / Local Team) ---
 async def is_allowed(update: Update):
@@ -222,6 +239,32 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        (update.effective_chat.id, amt, update.message.from_user.first_name))
         conn.commit(); cursor.close(); conn.close()
         await send_summary(update, context)
+# --- 👑 6. Master Commands (Sync & Manage) ---
+
+async def group_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/grouplist: ดูรายชื่อทุกกลุ่มที่บอทไปแฝงตัวอยู่และบันทึกไว้ใน DB"""
+    if str(update.effective_user.id) != str(MASTER_ADMIN): return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("""
+        SELECT cs.chat_id, cs.timezone, 
+        (SELECT COUNT(*) FROM team_members tm WHERE tm.chat_id = cs.chat_id) as team_cnt,
+        (SELECT COUNT(*) FROM history h WHERE h.chat_id = cs.chat_id AND h.timestamp > NOW() - INTERVAL '1 day') as activity
+        FROM chat_settings cs
+    """)
+    rows = cursor.fetchall(); cursor.close(); conn.close()
+    
+    msg = "🏢 **Master Group Control Center**\n```\n"
+    msg += f"{'Chat ID'.ljust(15)} {'TZ'.ljust(4)} {'T'.ljust(2)} {'Act'}\n"
+    msg += "------------------------------\n"
+    for r in rows:
+        # พยายามดึงชื่อกลุ่ม (Title) มาแสดง
+        try:
+            chat = await context.bot.get_chat(r[0])
+            title = (chat.title[:10] + "..") if chat.title and len(chat.title) > 10 else (chat.title or "N/A")
+        except: title = "Locked/Left"
+        msg += f"{str(r[0]).ljust(15)} {str(r[1]).ljust(4)} {str(r[2]).ljust(2)} {r[3]}\n"
+    msg += "```\n*Act = จำนวนรายการจดใน 24 ชม.*"
+    await update.message.reply_text(msg, parse_mode='MarkdownV2')
 
 # --- 🚀 9. Main Entrance ---
 if __name__ == '__main__':
@@ -240,6 +283,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("check", check_status))
     app.add_handler(CommandHandler("setadmin", set_admin))
     app.add_handler(CommandHandler("setlist", set_list))
+    app.add_handler(CommandHandler("grouplist", group_list))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     
