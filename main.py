@@ -1,406 +1,156 @@
 import os
-from datetime import datetime, timedelta
-
-from fastapi import FastAPI, Request
+import re
+from datetime import datetime
 from telegram import Update
-from telegram.ext import (
-    Application, ContextTypes,
-    MessageHandler, CommandHandler, filters
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ChatMemberHandler
+import database as db
 
-from database import get_conn, init_db
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
+def format_history(logs):
+    if not logs: return "ยังไม่มีรายการ"
+    count = len(logs)
+    lines = [f"{i+1}. {log['amount']:+d} (@{log['username']})" for i, log in enumerate(logs)]
+    if count <= 6: return "\n".join(lines)
+    # แสดง 3 อันแรก และ 3 อันสุดท้ายตามเงื่อนไขที่ตั้งไว้
+    return "\n".join(lines[:3]) + "\n... (ย่อรายการ) ...\n" + "\n".join(lines[-3:])
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-MASTER_ID = int(os.getenv("MASTER_ID", "0"))
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    role = db.get_user_role(chat_id, user_id)
+    if user_id == ADMIN_ID or db.is_global_user(user_id) or role:
+        await update.message.reply_text("✨ บอทพร้อมทำงานแล้ว!")
+    else:
+        await update.message.reply_text("❌ คุณยังไม่มีสิทธิการใช้งาน โปรดติดต่อแอดมิน")
 
-app = FastAPI()
-tg = Application.builder().token(BOT_TOKEN).build()
+async def handle_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    username = update.effective_user.username or str(user_id)
+    text = update.message.text
+    
+    match = re.match(r'^([+-])(\d+)$', text)
+    if not match: return
 
+    # ระบบ Auto-Wakeup: ถ้าคนพิมพ์คือคนมีสิทธิ์แต่กลุ่มยังไม่ลงทะเบียน ให้ตั้งเป็นเจ้าของทันที
+    if not db.get_user_role(chat_id, user_id) and (db.is_global_user(user_id) or user_id == ADMIN_ID):
+        db.set_group_permission(chat_id, user_id, username, 'owner')
 
-# ======================================================
-# ====================== UTILS =========================
-# ======================================================
-
-def fmt(rows):
-    s = ""
-    for i, r in enumerate(rows, 1):
-        s += f"{i:<3} {r[2]:<6} {r[0]:>8} ({r[1]})\n"
-    return s
-
-
-def tz_now(offset):
-    return datetime.utcnow() + timedelta(hours=offset)
-
-
-def today_range(offset):
-    now = tz_now(offset)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
-    return start - timedelta(hours=offset), end - timedelta(hours=offset)
-
-
-# ======================================================
-# ====================== ROLE ==========================
-# ======================================================
-
-def is_master(uid):
-    return uid == MASTER_ID
-
-
-def is_admin(uid):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT expire_at FROM admins WHERE user_id=%s", (uid,))
-    r = cur.fetchone()
-    conn.close()
-    return r and r[0] > datetime.utcnow()
-
-
-def is_team(chat, uid):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM team WHERE chat_id=%s AND user_id=%s", (chat, uid))
-    ok = cur.fetchone() is not None
-    conn.close()
-    return ok
-
-
-def allowed(chat, uid):
-    return is_master(uid) or is_admin(uid) or is_team(chat, uid)
-
-
-# ======================================================
-# ================== AUTO REGISTER =====================
-# ======================================================
-
-async def auto_reg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if not chat:
+    role = db.get_user_role(chat_id, user_id)
+    if user_id == ADMIN_ID: role = 'admin'
+    
+    if not role:
+        await update.message.reply_text("❌ ไม่มีสิทธิ์ใช้งานในกลุ่มนี้ โปรดติดต่อแอดมิน")
         return
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO groups(chat_id,name)
-        VALUES(%s,%s)
-        ON CONFLICT DO NOTHING
-    """, (chat.id, chat.title))
-    conn.commit()
-    conn.close()
-
-
-# ======================================================
-# ================== RECORD MONEY ======================
-# ======================================================
-
-async def record(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    txt = update.message.text.strip()
-
-    if not (txt.startswith("+") or txt.startswith("-")):
-        return
-
-    chat = update.effective_chat.id
-    uid = update.effective_user.id
-
-    if not allowed(chat, uid):
-        return
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO history(chat_id,amount,user_name)
-        VALUES(%s,%s,%s)
-    """, (chat, int(txt), update.effective_user.full_name))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text("✅ 记录成功")
-
-
-# ======================================================
-# ================== SUMMARY ===========================
-# ======================================================
-
-async def summary(update, ctx):
-    chat = update.effective_chat.id
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("SELECT timezone FROM groups WHERE chat_id=%s", (chat,))
-    tz = cur.fetchone()[0]
-
-    start, end = today_range(tz)
-
-    cur.execute("""
-        SELECT amount,user_name,to_char(timestamp,'HH24:MI')
-        FROM history
-        WHERE chat_id=%s AND timestamp BETWEEN %s AND %s
-        ORDER BY timestamp DESC LIMIT 6
-    """, (chat, start, end))
-
-    rows = list(reversed(cur.fetchall()))
-    total = sum(r[0] for r in rows)
-
+    # บันทึกยอดและแสดงสรุป
+    db.save_transaction(chat_id, user_id, username, int(text))
+    logs = db.get_logs(chat_id)
+    total = sum(log['amount'] for log in logs)
     await update.message.reply_text(
-        f"```\n{fmt(rows)}\n总计: {total}\n```"
+        f"✅ บันทึก: {text}\n\n{format_history(logs)}\n\n💰 ยอดรวม: {total:,.0f}", 
+        parse_mode='Markdown'
     )
-    conn.close()
 
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = db.get_subscription(user_id)
+    res = f"🔍 ID: `{user_id}`\n"
+    if user_id == ADMIN_ID:
+        res += "👑 สถานะ: แอดมินสูงสุด"
+    elif sub:
+        now = datetime.now()
+        diff = sub['expiry_date'] - now
+        if diff.total_seconds() > 0:
+            res += f"✅ สถานะ: ผู้ใช้งาน\n⏳ คงเหลือ: {diff.days} วัน {diff.seconds//3600} ชม. { (diff.seconds//60)%60 } นาที"
+        else:
+            res += "🔴 สถานะ: หมดอายุแล้ว"
+    else:
+        res += "❌ ไม่มีสิทธิ์ใช้งาน"
+    await update.message.reply_text(res, parse_mode='Markdown')
 
-# ======================================================
-# ================= SHOW ALL ===========================
-# ======================================================
+async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    last = db.get_last_transaction(chat_id)
+    if not last: return await update.message.reply_text("❌ ไม่พบรายการ")
+    
+    role = db.get_user_role(chat_id, user_id)
+    if user_id == ADMIN_ID: role = 'admin'
+    
+    # คนช่วยงานยกเลิกได้เฉพาะของตัวเอง
+    if role == 'helper' and last['user_id'] != user_id:
+        await update.message.reply_text("❌ ลบได้เฉพาะรายการของตัวเอง")
+    elif role in ['admin', 'owner', 'helper']:
+        db.delete_transaction(last['id'])
+        await update.message.reply_text(f"🔄 ยกเลิกรายการ {last['amount']} สำเร็จ")
 
-async def showall(update, ctx):
-    chat = update.effective_chat.id
+async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.my_chat_member.new_chat_member.status == "member":
+        await context.bot.send_message(
+            update.effective_chat.id, 
+            "⚠️ บอทเข้ากลุ่มแล้ว! รอผู้ใช้งานที่มีสิทธิ์เริ่มพิมพ์ข้อความเพื่อเปิดระบบ"
+        )
 
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT amount,user_name,to_char(timestamp,'HH24:MI')
-        FROM history WHERE chat_id=%s ORDER BY timestamp
-    """, (chat,))
-
-    await update.message.reply_text(f"```\n{fmt(cur.fetchall())}\n```")
-    conn.close()
-
-
-# ======================================================
-# ================= UNDO ===============================
-# ======================================================
-
-async def undo(update, ctx):
-    chat = update.effective_chat.id
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        DELETE FROM history WHERE id =
-        (SELECT id FROM history WHERE chat_id=%s ORDER BY timestamp DESC LIMIT 1)
-    """, (chat,))
-
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text("↩️ 已撤销")
-
-
-# ======================================================
-# ================= RESET ==============================
-# ======================================================
-
-async def reset(update, ctx):
-    chat = update.effective_chat.id
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("DELETE FROM history WHERE chat_id=%s", (chat,))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text("🗑 清空完成")
-
-
-# ======================================================
-# ================= SET TIMEZONE =======================
-# ======================================================
-
-async def settime(update, ctx):
-    chat = update.effective_chat.id
-    offset = int(ctx.args[0])
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("UPDATE groups SET timezone=%s WHERE chat_id=%s", (offset, chat))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text(f"⏰ UTC{offset:+}")
-
-
-# ======================================================
-# ================= TEAM MGMT ==========================
-# ======================================================
-
-async def add(update, ctx):
+# --- คำสั่งจัดการทีม ---
+async def add_helper(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
-        return
+        return await update.message.reply_text("⚠️ โปรด Reply ข้อความของคนช่วยงาน")
+    target = update.message.reply_to_message.from_user
+    db.set_group_permission(update.effective_chat.id, target.id, target.username, 'helper')
+    await update.message.reply_text(f"✅ เพิ่ม @{target.username} เป็นคนช่วยงานแล้ว")
 
-    chat = update.effective_chat.id
-    u = update.message.reply_to_message.from_user
+# --- คำสั่งสำหรับ Admin ---
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO team(chat_id,user_id,name) VALUES(%s,%s,%s)",
-                (chat, u.id, u.full_name))
-    conn.commit()
-    conn.close()
+async def admin_set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    
+    try:
+        username = context.args[0].replace("@", "")
+        days = int(context.args[1])
+        
+        # ค้นหา user_id จากฐานข้อมูลที่เคยบันทึกไว้ (ถ้ามี)
+        # ในระบบนี้เราจะอัปเดตผ่าน username ที่เคยพิมพ์เข้ามา
+        db.add_subscription_by_username(username, days)
+        await update.message.reply_text(f"✅ อนุมัติสิทธิ์ให้ @{username} ใช้งานได้เพิ่ม {days} วันเรียบร้อย!")
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ รูปแบบ: `/setuser @username [จำนวนวัน]`")
 
-    await update.message.reply_text("✅ 成员已添加")
+async def admin_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    
+    users = db.get_all_users()
+    if not users: return await update.message.reply_text("ยังไม่มีผู้ใช้งานในระบบ")
+    
+    msg = "📋 **รายชื่อผู้ใช้งานบอท:**\n"
+    for u in users:
+        status = "✅" if u['expiry_date'] > datetime.now() else "🔴"
+        msg += f"{status} @{u['username']} - หมดอายุ: {u['expiry_date'].strftime('%d/%m/%Y')}\n"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def admin_list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    
+    groups = db.get_all_groups()
+    msg = f"📍 **บอททำงานอยู่ใน {len(groups)} กลุ่ม:**\n"
+    for g in groups:
+        msg += f"• ID: `{g['group_id']}` (เจ้าของ: @{g['username']})\n"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
-async def addlist(update, ctx):
-    chat = update.effective_chat.id
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("SELECT name FROM team WHERE chat_id=%s", (chat,))
-    rows = [r[0] for r in cur.fetchall()]
-    conn.close()
-
-    await update.message.reply_text("\n".join(rows) or "empty")
-
-
-async def resetadd(update, ctx):
-    chat = update.effective_chat.id
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM team WHERE chat_id=%s", (chat,))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text("🗑 成员已清空")
-
-
-# ======================================================
-# ================= MASTER =============================
-# ======================================================
-
-async def setadmin(update, ctx):
-    if not is_master(update.effective_user.id):
-        return
-
-    uid = int(ctx.args[0])
-    days = int(ctx.args[1])
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO admins(user_id,expire_at)
-        VALUES(%s, NOW()+interval '%s day')
-        ON CONFLICT (user_id)
-        DO UPDATE SET expire_at = admins.expire_at + interval '%s day'
-    """, (uid, days, days))
-
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text("👑 Admin 设置完成")
-
-
-async def setlist(update, ctx):
-    if not is_master(update.effective_user.id):
-        return
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id,expire_at FROM admins")
-
-    txt = ""
-    for u, e in cur.fetchall():
-        status = "🟢" if e > datetime.utcnow() else "🔴"
-        txt += f"{u} {status} {e}\n"
-
-    conn.close()
-    await update.message.reply_text(txt or "empty")
-
-
-async def grouplist(update, ctx):
-    if not is_master(update.effective_user.id):
-        return
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id,name FROM groups")
-
-    txt = ""
-    for cid, name in cur.fetchall():
-        txt += f"{name} ({cid})\n"
-
-    conn.close()
-    await update.message.reply_text(txt or "empty")
-
-
-async def sync(update, ctx):
-    await update.message.reply_text("✅ DB 同步完成")
-
-
-# ======================================================
-# ================= CHECK + HELP =======================
-# ======================================================
-
-async def check(update, ctx):
-    uid = update.effective_user.id
-    role = "Team"
-
-    if is_master(uid):
-        role = "Master"
-    elif is_admin(uid):
-        role = "Admin"
-
-    await update.message.reply_text(f"ID: {uid}\nRole: {role}")
-
-
-async def help_cmd(update, ctx):
-    await update.message.reply_text("""
-+100 / -50
-/bot
-/showall
-/undo
-/reset
-/settime
-/add
-/addlist
-/resetadd
-/check
-
-Master:
-/setadmin
-/setlist
-/grouplist
-/sync
-""")
-
-
-# ======================================================
-# ================= REGISTER ===========================
-# ======================================================
-
-tg.add_handler(MessageHandler(filters.ALL, auto_reg))
-tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, record))
-
-tg.add_handler(CommandHandler("bot", summary))
-tg.add_handler(CommandHandler("showall", showall))
-tg.add_handler(CommandHandler("undo", undo))
-tg.add_handler(CommandHandler("reset", reset))
-tg.add_handler(CommandHandler("settime", settime))
-tg.add_handler(CommandHandler("add", add))
-tg.add_handler(CommandHandler("addlist", addlist))
-tg.add_handler(CommandHandler("resetadd", resetadd))
-tg.add_handler(CommandHandler("setadmin", setadmin))
-tg.add_handler(CommandHandler("setlist", setlist))
-tg.add_handler(CommandHandler("grouplist", grouplist))
-tg.add_handler(CommandHandler("sync", sync))
-tg.add_handler(CommandHandler("check", check))
-tg.add_handler(CommandHandler("help", help_cmd))
-
-
-# ======================================================
-# ================= WEBHOOK ============================
-# ======================================================
-
-@app.on_event("startup")
-async def startup():
-    init_db()
-
-
-@app.post("/webhook")
-async def webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, tg.bot)
-    await tg.process_update(update)
-    return {"ok": True}
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check))
+    app.add_handler(CommandHandler("undo", undo))
+    app.add_handler(CommandHandler("add", add_helper))
+    app.add_handler(CommandHandler("reset", lambda u, c: db.clear_transactions(u.effective_chat.id) or u.message.reply_text("🗑 รีเซ็ตยอดแล้ว")))
+    app.add_handler(CommandHandler("resetadd", lambda u, c: db.clear_helpers(u.effective_chat.id) or u.message.reply_text("👥 ล้างคนช่วยงานแล้ว")))
+    app.add_handler(ChatMemberHandler(on_join, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(CommandHandler("setuser", admin_set_user))
+    app.add_handler(CommandHandler("userlist", admin_list_users))
+    app.add_handler(CommandHandler("grouplist", admin_list_groups))
+    app.add_handler(MessageHandler(filters.Regex(r'^[+-]\d+$'), handle_record))
+    app.run_polling()
