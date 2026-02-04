@@ -52,12 +52,13 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
+    
     history_text = "📋 **รายการทั้งหมดของวันนี้:**\n" if show_all else ("...\n" if count > 6 else "")
     
     for i, r in enumerate(display_rows):
         num = (count - len(display_rows) + i + 1)
         time_str = r[2].strftime('%H:%M')
-        history_text += f"{num:<3} {time_str:<6} {r[0]:>8} ({r[1]})\n"
+        history_text += f"{num:<3} {time_str:<6} {r[0]:<12} ({r[1]:<20})\n"
 
     cursor.close(); conn.close()
     await update.message.reply_text(
