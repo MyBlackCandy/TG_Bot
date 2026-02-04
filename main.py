@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from database import init_db, get_db_connection
 
 # ตั้งค่า Logging เพื่อดูสถานะการทำงาน
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
 
 # ดึงค่าแอดมินสูงสุดจาก Environment Variables
 MASTER_ADMIN = os.getenv('ADMIN_ID')
@@ -39,25 +39,23 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     chat_id = update.effective_chat.id
     now = get_now(chat_id); today_str = now.strftime('%Y-%m-%d')
     conn = get_db_connection(); cursor = conn.cursor()
+    # ใช้สเตทเมนต์ SQL ที่ปลอดภัยและระบุ Type Cast ชัดเจน
     cursor.execute("""
         SELECT amount, user_name FROM history 
         WHERE chat_id = %s 
-        AND TO_CHAR(timestamp AT TIME ZONE 'UTC' + (SELECT timezone || ' hours' FROM chat_settings WHERE chat_id = %s), 'YYYY-MM-DD') = %s 
+        AND TO_CHAR(timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval, 'YYYY-MM-DD') = %s 
         ORDER BY timestamp ASC
     """, (chat_id, chat_id, today_str))
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
-    history_text = "📋 รายการทั้งหมดของวันนี้:\n" if show_all else ("...\n" if count > 6 else "")
+    history_text = "📋 รายการทั้งหมด:\n" if show_all else ("...\n" if count > 6 else "")
     for i, r in enumerate(display_rows):
         num = (count - len(display_rows) + i + 1)
         history_text += f"{num}. {'+' if r[0] > 0 else ''}{r[0]} ({r[1]})\n"
     
     cursor.close(); conn.close()
-    await update.message.reply_text(
-        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **ยอดรวม: {total}**",
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text(f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **ยอดรวม: {total}**", parse_mode='Markdown')
 
 # --- 🤖 คำสั่งจัดการบัญชี (Accounting Commands) ---
 async def help_cmd(update, context):
