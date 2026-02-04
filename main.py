@@ -53,7 +53,7 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
     
-    history_text = "📋 **รายการทั้งหมดของวันนี้:**\n" if show_all else ("...\n" if count > 6 else "")
+    history_text = "📋 **记录:**\n" if show_all else ("...\n" if count > 6 else "")
     
     for i, r in enumerate(display_rows):
         num = (count - len(display_rows) + i + 1)
@@ -68,11 +68,11 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     
 # --- 🤖 5. คำสั่งจัดการบัญชี (Accounting) ---
 async def help_cmd(update, context):
-    msg = ("📖 **Black Candy Help (ละเอียด)**\n━━━━━━━━━━━━━━━\n"
-           "💰 **การบันทึก:** พิมพ์ `+100` หรือ `-50` 机器人会自动登记，但是需要是授权者或者是操作者\n\n"
-           "⚙️ **บัญชี:**\n• `/bot` : 查看目前账单（呼叫机器人）\n• `/undo` : 撤销上一项登记\n• `/reset` : 清除今天所有登记\n• `/showall` : 查看所有登记\n• `/settime [+/-เลข]` : 设置登记账单时间 (例如 `/settime +8`)\n\n"
-           "👥 **ทีมงาน:**\n• `/add` : 增加操作人（线让需要增加的人在群里随便发一个信息，然后有权限的人回复 `/add`\n• `/addlist` : 查看操作者名单\n• `/resetadd` : 清除所有操作者\n\n"
-           "👑 **Admin:**\n• `/check` : 查看权限及可用期\n")
+    msg = ("📖 **黑糖果机器人说明**\n━━━━━━━━━━━━━━━\n"
+           "💰 **登记方式** 输入 `+100` 或 `-50` 机器人会自动登记，但是需要权限等级：管理员 或 被设置为操作者\n\n"
+           "⚙️ **操控指令:**\n• `/bot` : 查看目前账单（呼叫机器人）\n• `/undo` : 撤销上一项登记\n• `/reset` : 清除今天所有登记\n• `/showall` : 查看所有登记\n• `/settime [+/-เลข]` : 设置登记账单时间 (例如 `/settime +8`)\n\n"
+           "👥 **人员设置:**\n• `/add` : 增加操作人（让需要增加的人在群里随便发一个信息，然后有权限的人回复 `/add`\n• `/addlist` : 查看操作者名单\n• `/resetadd` : 清除所有操作者\n\n"
+           "👑 **管理员:**\n• `/check` : 查看权限及可用期\n")
            #• `/setadmin [天]` : เพิ่มวันแอดมิน (สะสมวันได้)\n• `/setlist` : ดูรายชื่อแอดมินทั้งหมด")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
