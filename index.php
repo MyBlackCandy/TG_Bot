@@ -2,34 +2,27 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        /* ปรับดีไซน์ให้เหมือนแอปมือถือ */
         body { 
             font-family: sans-serif; 
-            background-color: var(--tg-theme-bg-color, #f0f2f5); /* ใช้สีตามธีม Telegram */
+            background: var(--tg-theme-bg-color, #f0f2f5); 
             color: var(--tg-theme-text-color, #000);
+            padding: 10px;
         }
-        .btn-close {
-            background: #5c67f2; color: #fff; padding: 10px;
-            border-radius: 8px; text-align: center; cursor: pointer;
-        }
+        .card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 10px; padding: 15px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border-bottom: 1px solid #ccc; padding: 8px; text-align: left; }
     </style>
 </head>
 <body>
     <div class="card">
-        ...
-    </div>
-
+        <h3>📊 完整账单</h3>
+        </div>
     <script>
-        // ขยายหน้าจอให้เต็มทันทีที่เปิด
-        Telegram.WebApp.expand();
-        
-        // แจ้งเตือนเมื่อกดปิด หรือทำปุ่มปิดเองในเว็บ
-        function closeApp() {
-            Telegram.WebApp.close();
-        }
+        Telegram.WebApp.ready();
+        Telegram.WebApp.expand(); // ขยายหน้าต่างให้เต็มจอทันที
     </script>
 </body>
 </html>
