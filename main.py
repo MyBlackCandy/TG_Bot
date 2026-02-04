@@ -6,17 +6,17 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from database import init_db, get_db_connection
 
-# --- ⚙️ 1. ตั้งค่าพื้นฐานและการ Log ---
+# --- ⚙️ 1. Setup & Logging ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 MASTER_ADMIN = os.getenv('ADMIN_ID')
 
-# --- ⚙️ 2. ฟังก์ชันจัดการเวลาท้องถิ่น (Timezone Handling + Auto-Register) ---
+# --- ⚙️ 2. Timezone Management (Auto-Register Group) ---
 def get_local_time(chat_id, utc_time=None):
     if utc_time is None:
         utc_time = datetime.utcnow()
     conn = get_db_connection(); cursor = conn.cursor()
     
-    # ตรวจสอบกลุ่ม; ถ้าไม่มีในฐานข้อมูล ให้ลงทะเบียนอัตโนมัติ (Default +0)
+    # ตรวจสอบกลุ่ม; หากไม่มีในฐานข้อมูล ให้ลงทะเบียนอัตโนมัติ (Default +0)
     cursor.execute('SELECT timezone FROM chat_settings WHERE chat_id = %s', (chat_id,))
     res = cursor.fetchone()
     
@@ -30,36 +30,37 @@ def get_local_time(chat_id, utc_time=None):
     cursor.close(); conn.close()
     return utc_time + timedelta(hours=offset)
 
-# --- 🛡️ 3. ระบบตรวจสอบสิทธิ์ (Global Access Control) ---
+# --- 🛡️ 3. ระบบตรวจสอบสิทธิ์ (Global Master & Admin / Local Team) ---
 async def is_allowed(update: Update):
     uid = update.effective_user.id
     chat_id = update.effective_chat.id
     
-    # MASTER_ADMIN ทำได้ทุกอย่างทุกกลุ่ม
+    # 1. Master Admin (จาก ENV) - ใช้งานได้ทุกกลุ่ม
     if str(uid) == str(MASTER_ADMIN): return True
     
     conn = get_db_connection(); cursor = conn.cursor()
     
-    # เช็คสิทธิ์แอดมิน (Global: ใช้ได้ทุกกลุ่มถ้าไม่หมดอายุ)
+    # 2. แอดมินทั่วไป (Global - ใช้งานได้ทุกกลุ่มถ้าไม่หมดอายุ)
     cursor.execute('SELECT expire_date FROM admins WHERE user_id = %s', (uid,))
     res_admin = cursor.fetchone()
     if res_admin and res_admin[0] > datetime.utcnow():
         cursor.close(); conn.close(); return True
     
-    # เช็คสิทธิ์ทีมงาน (Local: เฉพาะกลุ่มนั้นๆ)
+    # 3. ทีมงาน/ผู้ช่วยจด (Local - ใช้งานได้เฉพาะกลุ่มที่ถูกเพิ่ม)
     cursor.execute('SELECT 1 FROM team_members WHERE member_id = %s AND chat_id = %s', (uid, chat_id))
     is_team = cursor.fetchone()
     
     cursor.close(); conn.close()
     return True if is_team else False
 
-# --- 📊 4. ระบบแสดงผลยอด (Summary Engine - Aligned UI) ---
+# --- 📊 4. ระบบแสดงผลยอด (Summary Engine - Aligned Table) ---
 async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_all=False):
     chat_id = update.effective_chat.id
     now_local = get_local_time(chat_id)
     today_str = now_local.strftime('%Y-%m-%d')
     
     conn = get_db_connection(); cursor = conn.cursor()
+    # ดึงข้อมูลแยกกลุ่มชัดเจน พร้อมคำนวณเวลาท้องถิ่น
     cursor.execute("""
         SELECT amount, user_name, (timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval) as local_ts 
         FROM history WHERE chat_id = %s 
@@ -88,25 +89,21 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
         f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: `{total}`**",
         parse_mode='MarkdownV2'
     )
-    
-# --- 🤖 5. คำสั่งจัดการบัญชี (Accounting) ---
+
+# --- 🤖 5. คำสั่งจัดการบัญชี (Accounting Commands) ---
 async def help_cmd(update, context):
     msg = ("📖 **黑糖果机器人说明**\n━━━━━━━━━━━━━━━\n"
-           "💰 **登记方式** 输入 `+100` 或 `-50` 机器人会自动登记\n\n"
+           "💰 **登记方式** 输入 `+100` 或 `-50` 即可\n\n"
            "⚙️ **操控指令:**\n"
-           "• `/bot` : 查看目前账单\n"
-           "• `/undo` : 撤销上一项登记\n"
-           "• `/reset` : 清除今天所有登记\n"
-           "• `/showall` : 查看所有登记\n"
-           "• `/settime [+/-数字]` : 设置登记时间 (如 `/settime +8`)\n\n"
-           "👥 **人员设置:**\n"
-           "• `/add` : 增加操作者 (Reply 对方)\n"
-           "• `/addlist` : 查看操作者名单\n"
-           "• `/resetadd` : 清除所有操作者\n\n"
+           "• `/bot` : 查看账单 | `/undo` : 撤销上次\n"
+           "• `/reset` : 清除今日 | `/showall` : 查看全部\n"
+           "• `/settime [+/-H]` : 设置时区\n\n"
+           "👥 **人员管理:**\n"
+           "• `/add` : 增加操作者 (Reply) | `/addlist` : 查看名单\n"
+           "• `/resetadd` : 清除操作者\n\n"
            "👑 **管理员:**\n"
-           "• `/check` : 查看权限及可用期\n"
-           "• `/setadmin [ID/Reply] [天]` : 增加管理期限\n"
-           "• `/setlist` : 查看所有管理员")
+           "• `/check` : 查看权限 | `/setadmin` : 授权管理\n"
+           "• `/setlist` : 查看管理员名单")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def undo_last(update, context):
@@ -136,8 +133,8 @@ async def set_time(update, context):
         cursor.execute("INSERT INTO chat_settings (chat_id, timezone) VALUES (%s, %s) ON CONFLICT (chat_id) DO UPDATE SET timezone = EXCLUDED.timezone", (update.effective_chat.id, tz))
         conn.commit(); cursor.close(); conn.close()
         new_time = get_local_time(update.effective_chat.id)
-        await update.message.reply_text(f"✅ 已设置时间! `{new_time.strftime('%H:%M:%S')}`")
-    except: await update.message.reply_text("用: `/settime +8` 或者 `/settime -8` ")
+        await update.message.reply_text(f"✅ 已设置时区! `{new_time.strftime('%H:%M:%S')}`")
+    except: await update.message.reply_text("用法: `/settime +8` 或 `/settime -8` ")
 
 # --- 👥 6. จัดการทีมงาน (Team Members) ---
 async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,37 +145,30 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute("INSERT INTO team_members VALUES (%s, %s, %s) ON CONFLICT (member_id, chat_id) DO UPDATE SET username = EXCLUDED.username", (target, update.effective_chat.id, name))
         conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"✅ 增加 {name} 成操作者")
-    else: await update.message.reply_text("⚠️ 用回复的方式来设置，用 `/add` 来回复需要设置的人 ")
+        await update.message.reply_text(f"✅ 增加 {name} 为本群操作者")
+    else: await update.message.reply_text("⚠️ 请使用回复对方的方式进行 `/add` ")
 
 async def add_list(update, context):
     if not await is_allowed(update): return
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("SELECT username, member_id FROM team_members WHERE chat_id = %s", (update.effective_chat.id,))
     rows = cursor.fetchall(); cursor.close(); conn.close()
-    msg = "👥 **操作者名单:**\n" + "\n".join([f"{i+1}. {r[0]} (`{r[1]}`)" for i, r in enumerate(rows)]) if rows else "ℹ️ 没有设置操作者"
+    msg = "👥 **本群操作者名单:**\n" + "\n".join([f"{i+1}. {r[0]} (`{r[1]}`)" for i, r in enumerate(rows)]) if rows else "ℹ️ 未设置操作者"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-async def reset_add(update, context):
-    if not await is_allowed(update): return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("DELETE FROM team_members WHERE chat_id = %s", (update.effective_chat.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("🗑️ 已清除所有操作者")
-
-# --- 👑 7. ระบบ Admin & MASTER (Privileged) ---
+# --- 👑 7. ระบบ Admin & MASTER (Global Control) ---
 async def check_status(update, context):
     uid = update.effective_user.id; conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT expire_date FROM admins WHERE user_id = %s', (uid,))
     res = cursor.fetchone(); cursor.close(); conn.close()
     if str(uid) == str(MASTER_ADMIN): 
-        msg = f"🆔 用户编号: `{uid}`\n👑 权限等级: **最高管理员 (永久)**"
+        msg = f"🆔 ID: `{uid}`\n👑 权限: **最高管理员 (MASTER)**"
     elif res:
         rem = res[0] - datetime.utcnow()
         if rem.total_seconds() > 0:
-            msg = f"🆔 用户编号: `{uid}`\n⏳ 管理员可用: `{rem.days} 天 {rem.seconds // 3600} 小时 {(rem.seconds // 60) % 60} 分钟`"
-        else: msg = f"🆔 用户编号: `{uid}`\n❌ 权限已过期"
-    else: msg = f"🆔 用户编号: `{uid}`\n❌ 权限等级: 没有开通"
+            msg = f"🆔 ID: `{uid}`\n⏳ 有效期剩: `{rem.days} 天 {rem.seconds // 3600} 小时 {(rem.seconds // 60) % 60} 分钟`"
+        else: msg = f"🆔 ID: `{uid}`\n❌ 权限已过期"
+    else: msg = f"🆔 ID: `{uid}`\n❌ 无管理员权限"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def set_admin(update, context):
@@ -193,20 +183,18 @@ async def set_admin(update, context):
             ON CONFLICT (user_id) DO UPDATE SET expire_date = GREATEST(admins.expire_date, CURRENT_TIMESTAMP) + interval '%s day'
         """, (target_id, days, days))
         conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"🆔 用户编号 `{target_id}` 已增加 `{days}` 天")
-    except: await update.message.reply_text("用: `/setadmin [ID] [天]` 或回复对方")
+        await update.message.reply_text(f"👑 已授权 ID `{target_id}` 增加 `{days}` 天 (Global Admin)")
+    except: await update.message.reply_text("用法: `/setadmin [ID] [天]` หรือ Reply")
 
 async def set_list(update, context):
     if str(update.effective_user.id) != str(MASTER_ADMIN): return
     conn = get_db_connection(); cursor = conn.cursor()
-    # ดึงชื่อจาก team_members มาแสดงด้วยถ้าหาเจอ
     cursor.execute("""
         SELECT a.user_id, a.expire_date, COALESCE(t.username, 'Unknown') 
         FROM admins a LEFT JOIN (SELECT DISTINCT ON (member_id) member_id, username FROM team_members) t 
         ON a.user_id = t.member_id ORDER BY a.expire_date DESC
     """)
     rows = cursor.fetchall(); cursor.close(); conn.close(); now = datetime.utcnow()
-    
     msg = "👑 **管理员名单:**\n```\n"
     msg += f"{'ID'.ljust(11)} {'Name'.ljust(10)} {'Status'}\n"
     msg += "------------------------------\n"
@@ -216,9 +204,9 @@ async def set_list(update, context):
         status = f"{rem.days}d {rem.seconds//3600}h" if r[1] > now else "Expired"
         msg += f"{str(r[0]).ljust(11)} {name} {status}\n"
     msg += "```"
-    await update.message.reply_text(msg if rows else "ℹ️ 没有数据", parse_mode='MarkdownV2')
+    await update.message.reply_text(msg if rows else "ℹ️ 无数据", parse_mode='MarkdownV2')
 
-# --- 📥 8. Message Handler (The Record Core) ---
+# --- 📥 8. Message Handler (Accounting) ---
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     text = update.message.text.strip(); match = re.match(r'^([+-])(\d+)$', text)
@@ -244,7 +232,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("settime", set_time))
     app.add_handler(CommandHandler("add", add_member))
     app.add_handler(CommandHandler("addlist", add_list))
-    app.add_handler(CommandHandler("resetadd", reset_add))
     app.add_handler(CommandHandler("check", check_status))
     app.add_handler(CommandHandler("setadmin", set_admin))
     app.add_handler(CommandHandler("setlist", set_list))
