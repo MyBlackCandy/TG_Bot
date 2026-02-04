@@ -1,147 +1,120 @@
 import os
 import re
-from datetime import datetime
-from telegram import Update
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from database import init_db, get_db_connection
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-# ดึงค่าแอดมินหลักจาก Environment Variable (ต้องตั้งใน Railway)
 MASTER_ADMIN = os.getenv('ADMIN_ID')
-# ✅ ใช้โดเมนที่ได้จาก Railway (จากภาพ d4a03c)
 BASE_WEB_URL = "https://tgbot-production-d541.up.railway.app"
 
-# --- 🛡️ ฟังก์ชันตรวจสอบสิทธิ์ ---
-async def check_access(user_id, chat_id):
-    if str(user_id) == str(MASTER_ADMIN): return True
-    conn = get_db_connection(); cursor = conn.cursor()
-    # เช็กสมาชิกที่ยังไม่หมดอายุ
-    cursor.execute('SELECT 1 FROM customers WHERE user_id = %s AND expire_date > CURRENT_TIMESTAMP', (user_id,))
-    if cursor.fetchone(): 
-        cursor.close(); conn.close(); return True
-    # เช็กสิทธิ์ลูกทีมในกลุ่มนี้
-    cursor.execute('SELECT 1 FROM team_members WHERE member_id = %s AND allowed_chat_id = %s', (user_id, chat_id))
-    res = cursor.fetchone(); cursor.close(); conn.close()
-    return True if res else False
-
-# --- 📊 ฟังก์ชันสรุปยอด (ย่อรายการเมื่อเกิน 6) ---
-async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
-    rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
-    
-    if count == 0:
-        return await update.message.reply_text("📋 **当前无记录 (ยังไม่มีรายการ)**")
-
-    # ✅ ระบบย่อรายการ: แสดงแค่ 6 รายการล่าสุด
-    history_text = "...\n" if count > 6 else ""
-    display_rows = rows[-6:] if count > 6 else rows
-    start_num = max(1, count - 5) if count > 6 else 1
-    
-    for i, r in enumerate(display_rows):
-        sign = "+" if r[0] > 0 else ""
-        history_text += f"{start_num + i}. {sign}{r[0]} ({r[1]})\n"
-    
-    # ✅ ปุ่มกดดูรายงานออนไลน์ (ส่ง Chat ID ไปทาง URL)
-    keyboard = [[InlineKeyboardButton("📊 点击跳转完整账单 (ดูรายงานฉบับเต็ม)", url=f"{BASE_WEB_URL}/index.php?c={chat_id}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    cursor.close(); conn.close()
-    await update.message.reply_text(
-        f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+# --- 🛠️ 1. ฟังก์ชันหน้าแรก (/start) ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    welcome_text = (
+        "🍎 **欢迎使用 黑糖果 记账机器人**\n"
+        "ยินดีต้อนรับสู่บอทจดบัญชี Black Candy\n\n"
+        "🤖 **我能做什么？(บอททำอะไรได้บ้าง?)**\n"
+        "• 自动记录群内账目 (จดบันทึกบัญชีในกลุ่มอัตโนมัติ)\n"
+        "• 实时汇总总额 (สรุปยอดรวมแบบเรียลไทม์)\n"
+        "• 在线查看完整账单 (ดูรายงานฉบับเต็มผ่านหน้าเว็บ)\n"
+        "• 权限管理系统 (ระบบจัดการสิทธิ์และสมาชิก)\n\n"
+        "👇 **请选择操作 (โปรดเลือกรายการด้านล่าง):**"
     )
+    
+    keyboard = [
+        [InlineKeyboardButton("💳 购买权限 (ชำระเงิน)", callback_data='pay'),
+         InlineKeyboardButton("📖 使用教程 (วิธีใช้งาน)", callback_data='help')],
+        [InlineKeyboardButton("🎁 免费试用 (ทดลองใช้ฟรี 1 วัน)", callback_data='free_trial')],
+        [InlineKeyboardButton("📅 查询有效期 (เช็กวันใช้งาน)", callback_data='check_status')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if update.message:
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        # สำหรับกรณีเรียกซ้ำผ่าน Callback
+        await update.effective_message.edit_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-# --- 🤖 คำสั่งบอท ---
+# --- 🛡️ 2. ฟังก์ชันจัดการปุ่มกด (Callback Query) ---
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    
+    if query.data == 'pay':
+        pay_text = (
+            "💳 **充值续费 (ชำระเงิน)**\n"
+            "━━━━━━━━━━━━━━━\n"
+            "• 30 天 / 100 USDT\n\n"
+            f"📍 **转账地址 (TRC20):**\n`{os.getenv('USDT_ADDRESS')}`\n\n"
+            "⚠️ *轉帳後請聯繫客服 (โอนเงินแล้วแจ้งแอดมิน):* @Mbcdcandy"
+        )
+        await query.edit_message_text(pay_text, parse_mode='Markdown', 
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回 (กลับหน้าแรก)", callback_data='back')]]))
 
-async def help_command(update, context):
-    msg = ("📖 **黑糖果机器人使用说明**\n"
-           "━━━━━━━━━━━━━━━\n"
-           "💰 **จดบัญชี:** พิมพ์ `+100` หรือ `-50` ในกลุ่ม\n"
-           "📋 **คำสั่งพื้นฐาน:**\n"
-           "• `/show` : ดูสรุปยอดปัจจุบัน\n"
-           "• `/undo` : ยกเลิกรายการล่าสุด (และโชว์ยอดใหม่)\n"
-           "• `/reset` : ล้างบัญชีทั้งหมดในกลุ่ม\n"
-           "• `/check` : เช็กวันหมดอายุและ ID\n\n"
-           "👥 **จัดการทีม:**\n"
-           "• Reply + `/add` : เพิ่มคนช่วยจด\n"
-           "• Reply + `/remove` : ลบคนช่วยจด")
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    elif query.data == 'help':
+        help_text = (
+            "📖 **使用教程 (วิธีใช้งาน)**\n"
+            "━━━━━━━━━━━━━━━\n"
+            "1. **บันทึก:** พิมพ์ `+100` หรือ `-50` ในกลุ่ม\n"
+            "2. **ยกเลิก:** พิมพ์ `/undo` เพื่อลบรายการล่าสุด\n"
+            "3. **ล้างค่า:** พิมพ์ `/reset` เพื่อเริ่มใหม่ทั้งหมด\n"
+            "4. **ดูรายงาน:** กดปุ่ม '查看完整账单' ใต้ยอดสรุป"
+        )
+        await query.edit_message_text(help_text, parse_mode='Markdown',
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回 (กลับหน้าแรก)", callback_data='back')]]))
 
-async def undo_last(update, context):
-    if not await check_access(update.message.from_user.id, update.effective_chat.id): return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (update.effective_chat.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("↩️ **已撤销上一条记录 (ยกเลิกแล้ว)**")
-    await send_summary(update, context) # ✅ ส่งสรุปยอดใหม่ทันที
-
-async def add_member(update, context):
-    if not update.message.reply_to_message:
-        return await update.message.reply_text("⚠️ 请回复操作者的信息 (โปรด Reply ข้อความคนที่ต้องการเพิ่ม)")
-    if not await check_access(update.message.from_user.id, update.effective_chat.id): return
-    target = update.message.reply_to_message.from_user
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('INSERT INTO team_members (member_id, allowed_chat_id) VALUES (%s, %s) ON CONFLICT DO NOTHING', (target.id, update.effective_chat.id))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text(f"✅ 已增加操作者: {target.first_name}")
-
-async def reset_history(update, context):
-    if not await check_access(update.message.from_user.id, update.effective_chat.id): return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM history WHERE chat_id = %s', (update.effective_chat.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("🧹 **已清除所有数据 (Reset แล้ว)**")
-
-async def check_status(update, context):
-    uid = update.effective_user.id
-    if str(uid) == str(MASTER_ADMIN): return await update.message.reply_text("👑 **MASTER ADMIN**")
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
-    res = cursor.fetchone(); cursor.close(); conn.close()
-    msg = f"👤 ID: `{uid}`\n📅 到期: `{res[0].strftime('%Y-%m-%d %H:%M')}`" if res else f"👤 ID: `{uid}`\n❌ 未开通 (ยังไม่เปิดสมาชิก)"
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def set_admin_manual(update, context):
-    """/setadmin [ID] [Days] - แอดมินหลักใช้เพิ่มวันสมาชิก"""
-    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
-    try:
-        uid, days = int(context.args[0]), int(context.args[1])
+    elif query.data == 'free_trial':
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("INSERT INTO customers (user_id, expire_date) VALUES (%s, CURRENT_TIMESTAMP + interval '%s day') ON CONFLICT (user_id) DO UPDATE SET expire_date = EXCLUDED.expire_date", (uid, days))
-        conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"👑 **Admin Set:** ID {uid} (+{days} วัน)")
-    except: await update.message.reply_text("รูปแบบ: `/setadmin [ID] [วัน]`")
+        cursor.execute('SELECT 1 FROM customers WHERE user_id = %s', (uid,))
+        if cursor.fetchone():
+            msg = "❌ **您已领过试用 (คุณเคยรับสิทธิ์ทดลองใช้ไปแล้ว)**"
+        else:
+            expire_trial = datetime.now() + timedelta(days=1)
+            cursor.execute('INSERT INTO customers (user_id, expire_date) VALUES (%s, %s)', (uid, expire_trial))
+            conn.commit()
+            msg = f"✅ **试用成功! (รับสิทธิ์ฟรีแล้ว)**\n📅 到期: `{expire_trial.strftime('%Y-%m-%d %H:%M')}`"
+        cursor.close(); conn.close()
+        await query.edit_message_text(msg, parse_mode='Markdown',
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回 (กลับหน้าแรก)", callback_data='back')]]))
 
-async def handle_accounting(update, context):
-    if not update.message or not update.message.text: return
-    text = update.message.text.strip(); match = re.match(r'^([+-])(\d+)$', text)
-    if match:
-        if not await check_access(update.message.from_user.id, update.effective_chat.id): return
-        amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
+    elif query.data == 'check_status':
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (update.effective_chat.id, amt, update.message.from_user.first_name))
-        conn.commit(); cursor.close(); conn.close()
-        await send_summary(update, context)
+        cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
+        res = cursor.fetchone(); cursor.close(); conn.close()
+        
+        if str(uid) == str(MASTER_ADMIN):
+            msg = "👑 **สถานะ: MASTER ADMIN**\n∞ อายุการใช้งาน: ถาวร (永久)"
+        elif res:
+            expire = res[0]
+            if expire > datetime.now():
+                msg = f"✅ **正常使用 (ใช้งานได้ปกติ)**\n📅 到期日期: `{expire.strftime('%Y-%m-%d')}`\n⏰ 到期时间: `{expire.strftime('%H:%M')}`"
+            else:
+                msg = f"❌ **已过期 (หมดอายุแล้ว)**\n📅 到期: `{expire.strftime('%Y-%m-%d %H:%M')}`"
+        else:
+            msg = "❌ **未开通权限 (ยังไม่มีข้อมูลการใช้งาน)**"
+        
+        await query.edit_message_text(msg, parse_mode='Markdown',
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 返回 (กลับหน้าแรก)", callback_data='back')]]))
 
-# --- 🚀 RUN BOT ---
+    elif query.data == 'back':
+        await start(update, context)
+
+# --- 🚀 ฟังก์ชันหลัก (Main) ---
 if __name__ == '__main__':
     init_db()
     app = Application.builder().token(os.getenv('TOKEN')).build()
     
-    # ⚠️ เรียงลำดับคำสั่ง (CommandHandler ต้องอยู่ก่อน MessageHandler)
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("show", send_summary))
-    app.add_handler(CommandHandler("undo", undo_last))
-    app.add_handler(CommandHandler("reset", reset_history))
-    app.add_handler(CommandHandler("add", add_member))
-    app.add_handler(CommandHandler("check", check_status))
-    app.add_handler(CommandHandler("setadmin", set_admin_manual))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command)) # ฟังก์ชัน help เดิม
+    app.add_handler(CommandHandler("undo", undo_last))   # ฟังก์ชัน undo เดิม
+    app.add_handler(CommandHandler("reset", reset_history)) # ฟังก์ชัน reset เดิม
     
-    # ดักจับตัวเลขจดบัญชี
+    # ตัวจัดการปุ่มกด Inline
+    app.add_handler(update.callback_query_handler(button_handler))
+    
+    # ตัวจัดการจดบันทึกตัวเลข
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_accounting))
     
-    print("Bot is ready (Accounting Stable Mode)")
+    print("New UI Bot is running...")
     app.run_polling()
