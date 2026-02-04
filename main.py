@@ -58,7 +58,7 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     for i, r in enumerate(display_rows):
         num = (count - len(display_rows) + i + 1)
         time_str = r[2].strftime('%H:%M')
-        history_text += f"{num:<3} {time_str:<6} {r[0]:<9} ({r[1]})\n"
+        history_text += f"{num:<3} {time_str:<6} {r[0]:>9} ({r[1]})\n"
 
     cursor.close(); conn.close()
     await update.message.reply_text(
