@@ -1,219 +1,164 @@
 import os
 import re
 import logging
+import random
+import requests
+import psycopg2
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from database import init_db, get_db_connection
 
-# --- ⚙️ 1. Setup & Logging ---
+# --- ⚙️ 1. Configuration & Logging ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+TOKEN = os.getenv('TOKEN')
 MASTER_ADMIN = os.getenv('ADMIN_ID')
+DATABASE_URL = os.getenv('DATABASE_URL')
+# *** สำคัญ: ใส่เลขกระเป๋า USDT (TRC-20) ของคุณที่นี่ ***
+MY_WALLET = "YOUR_TRON_WALLET_ADDRESS" 
+USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+TRONSCAN_API = "https://apilist.tronscan.org/api/token_trc20_transfer"
 
-# --- 🔄 2. Core System Functions ---
-
-async def register_group_if_not_exists(chat_id, title):
-    """อัตโนมัติบันทึกกลุ่มใหม่ลง DB"""
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('''INSERT INTO chat_settings (chat_id, title) VALUES (%s, %s)
-                      ON CONFLICT (chat_id) DO UPDATE SET title = EXCLUDED.title, is_active = TRUE''', 
-                   (chat_id, title))
-    conn.commit(); cursor.close(); conn.close()
-
-def get_local_time(chat_id):
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT timezone FROM chat_settings WHERE chat_id = %s', (chat_id,))
-    res = cursor.fetchone()
-    offset = res[0] if res else 0
-    cursor.close(); conn.close()
-    return datetime.utcnow() + timedelta(hours=offset)
+# --- 🔄 2. Database Connection ---
+def get_db_connection():
+    url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    return psycopg2.connect(url, sslmode='require')
 
 async def get_role(uid, chat_id):
     if str(uid) == str(MASTER_ADMIN): return "master"
     conn = get_db_connection(); cursor = conn.cursor()
-    # ตรวจสอบ Admin (Global)
     cursor.execute('SELECT expire_date FROM admins WHERE user_id = %s', (uid,))
     res = cursor.fetchone()
-    if res and res[0] > datetime.utcnow(): 
+    if res and res[0] > datetime.utcnow():
         cursor.close(); conn.close(); return "admin"
-    # ตรวจสอบ Team (Local)
     cursor.execute('SELECT 1 FROM team_members WHERE member_id = %s AND chat_id = %s', (uid, chat_id))
-    res_team = cursor.fetchone()
-    cursor.close(); conn.close()
+    res_team = cursor.fetchone(); cursor.close(); conn.close()
     return "team" if res_team else None
 
-# --- 📊 3. Summary Engine ---
-
+# --- 📈 3. Accounting System (UI & Logic) ---
 async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_all=False):
     chat_id = update.effective_chat.id
-    now_local = get_local_time(chat_id); today_str = now_local.strftime('%Y-%m-%d')
     conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT timezone FROM chat_settings WHERE chat_id = %s", (chat_id,))
+    res_tz = cursor.fetchone(); tz = res_tz[0] if res_tz else 0
+    
+    now_local = datetime.utcnow() + timedelta(hours=tz)
+    today_str = now_local.strftime('%Y-%m-%d')
+    
     cursor.execute("""
-        SELECT amount, user_name, (timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval) as local_ts 
+        SELECT amount, user_name, (timestamp + (%s || ' hours')::interval) as local_ts 
         FROM history WHERE chat_id = %s 
-        AND TO_CHAR(timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval, 'YYYY-MM-DD') = %s 
+        AND TO_CHAR(timestamp + (%s || ' hours')::interval, 'YYYY-MM-DD') = %s 
         ORDER BY timestamp ASC
-    """, (chat_id, chat_id, chat_id, today_str))
+    """, (tz, chat_id, tz, today_str))
+    
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
     
     text = "```\n"
-    text += f"{'#'.ljust(3)} {'时间'.ljust(5)} {'金额'.ljust(8)} {'姓名'}\n"
-    text += "--------------------------\n"
+    text += f"{'#'.ljust(3)} {'时间'.ljust(5)} {'金额'.ljust(8)} {'姓名'}\n--------------------------\n"
     for i, r in enumerate(display_rows):
-        num = str((count - len(display_rows) + i + 1)).ljust(3)
-        time_str = r[2].strftime('%H:%M').ljust(5)
-        amt_str = f"{'+' if r[0] > 0 else ''}{r[0]}".ljust(8)
-        text += f"{num} {time_str} {amt_str} {r[1]}\n"
+        idx = str((count - len(display_rows) + i + 1)).ljust(3)
+        t_str = r[2].strftime('%H:%M').ljust(5)
+        a_str = f"{'+' if r[0] > 0 else ''}{r[0]}".ljust(8)
+        text += f"{idx} {t_str} {a_str} {r[1]}\n"
     text += "```"
     cursor.close(); conn.close()
-    await update.message.reply_text(f"🍎 **今日账目 ({today_str})**\n{text}━━━━━━━━━━━━━━━\n💰 **总额: `{total}`**", parse_mode='MarkdownV2')
+    await update.message.reply_text(f"🍎 **今日账目 ({today_str})**\n{text}💰 **总额: `{total}`**", parse_mode='MarkdownV2')
 
-# --- 👥 4. User/Team Commands ---
-
-async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/check: ตรวจสอบสิทธิ์และเวลาที่เหลือ"""
+# --- 💳 4. USDT Auto-Payment (TronScan) ---
+async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    chat_id = update.effective_chat.id
-    role = await get_role(uid, chat_id)
+    unique_amt = 10.0 + (random.randint(1, 999) / 1000.0) # สุ่มเศษ 3 ตำแหน่ง (เช่น 10.123)
+    expire = datetime.utcnow() + timedelta(minutes=30)
     
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT expire_date FROM admins WHERE user_id = %s', (uid,))
-    res_admin = cursor.fetchone(); cursor.close(); conn.close()
+    cursor.execute("INSERT INTO pending_payments (user_id, amount_expected, expire_at) VALUES (%s, %s, %s)", 
+                   (uid, unique_amt, expire))
+    conn.commit(); cursor.close(); conn.close()
     
-    msg = f"🆔 **用户编号:** `{uid}`\n"
-    if role == "master": msg += "👑 **权限:** 最高管理员 (Master)\n⏳ **有效期:** 永久"
-    elif role == "admin":
-        rem = res_admin[0] - datetime.utcnow()
-        msg += f"👮 **权限:** 全局管理员 (Admin)\n⏳ **有效期:** `{rem.days} 天 {rem.seconds // 3600} 小时`"
-    elif role == "team": msg += "👥 **权限:** 群组操作员 (Team Member)"
-    else: msg += "❌ **权限:** 未授权"
-    
+    msg = (f"💳 **USDT-TRC20 支付订单**\n"
+           f"━━━━━━━━━━━━━━━\n"
+           f"请转账**精确金额** (含小数点):\n"
+           f"💰 金额: `{unique_amt}` USDT\n"
+           f"📍 地址: `{MY_WALLET}`\n"
+           f"⏳ 有效期: 30 分钟\n"
+           f"━━━━━━━━━━━━━━━\n"
+           f"✅ 转账后系统将自动通过 TronScan 确认")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-async def help_cmd(update, context):
-    msg = ("📖 **使用帮助**\n━━━━━━━━━━━━━━━\n"
-           "💰 **登记:** 输入 `+100` 或 `-50`\n"
-           "• `/bot`: 今日简报 | `/undo`: 撤销上一笔\n"
-           "• `/reset`: 清空今日 | `/showall`: 查看全部\n"
-           "• `/check`: 检查权限 | `/settime`: 设置时区\n\n"
-           "👮 **Admin:** `/add`, `/addlist`, `/resetadd`\n"
-           "👑 **Master:** `/setadmin`, `/setlist`, `/grouplist`, `/sync`")
-    await update.message.reply_text(msg)
+async def payment_monitor(context: ContextTypes.DEFAULT_TYPE):
+    params = {"limit": 30, "direction": "in", "relatedAddress": MY_WALLET, "token_address": USDT_CONTRACT}
+    try:
+        data = requests.get(TRONSCAN_API, params=params).json()
+        for tx in data.get('token_transfers', []):
+            amt = float(tx['quant']) / 1000000
+            tx_h = tx['transaction_id']
+            
+            conn = get_db_connection(); cursor = conn.cursor()
+            cursor.execute("SELECT id, user_id FROM pending_payments WHERE amount_expected = %s AND status = 'PENDING'", (amt,))
+            order = cursor.fetchone()
+            
+            if order:
+                oid, uid = order
+                cursor.execute("UPDATE pending_payments SET status = 'SUCCESS', tx_hash = %s WHERE id = %s", (tx_h, oid))
+                cursor.execute("SELECT expire_date FROM admins WHERE user_id = %s", (uid,))
+                res = cursor.fetchone()
+                start = max(res[0], datetime.utcnow()) if res else datetime.utcnow()
+                new_exp = start + timedelta(days=30)
+                
+                if res: cursor.execute("UPDATE admins SET expire_date = %s WHERE user_id = %s", (new_exp, uid))
+                else: cursor.execute("INSERT INTO admins (user_id, expire_date) VALUES (%s, %s)", (uid, new_exp))
+                conn.commit()
+                await context.bot.send_message(chat_id=uid, text=f"✅ 支付成功！已增加 30 天权限。\n📅 到期日: {new_exp.strftime('%Y-%m-%d')}")
+            cursor.close(); conn.close()
+    except: pass
 
-# --- 👮 5. Admin Commands (เพิ่มผู้ใช้งาน) ---
-
+# --- 👮 5. Admin & Team Management ---
 async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/add: เพิ่มคนจดบันทึก (โดยการ Reply)"""
     role = await get_role(update.effective_user.id, update.effective_chat.id)
     if role not in ['master', 'admin']: return
     if update.message.reply_to_message:
         target = update.message.reply_to_message.from_user
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO team_members VALUES (%s, %s, %s) ON CONFLICT DO NOTHING', 
+        cursor.execute("INSERT INTO team_members (member_id, chat_id, username) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", 
                        (target.id, update.effective_chat.id, target.first_name))
         conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"✅ 已成功增加 `{target.first_name}` 为本群操作者")
-    else:
-        await update.message.reply_text("⚠️ 请使用回复对方的方式进行 `/add` ")
+        await update.message.reply_text(f"✅ 已添加 {target.first_name} 为本群操作员")
 
-async def team_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/addlist: ดูรายชื่อคนจดบันทึกในกลุ่มปัจจุบัน"""
-    role = await get_role(update.effective_user.id, update.effective_chat.id)
-    if role not in ['master', 'admin']: return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT username, member_id FROM team_members WHERE chat_id = %s", (update.effective_chat.id,))
-    rows = cursor.fetchall(); cursor.close(); conn.close()
-    msg = "👥 **本群操作者名单:**\n" + "\n".join([f"• {r[0]} (`{r[1]}`)" for r in rows]) if rows else "ℹ️ 暂无操作者"
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/remove: ลบผู้ช่วยงาน (Reply คนที่จะลบ)"""
-    role = await get_role(update.effective_user.id, update.effective_chat.id)
-    if role not in ['master', 'admin']: return
-    
-    if update.message.reply_to_message:
-        target = update.message.reply_to_message.from_user
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('DELETE FROM team_members WHERE member_id = %s AND chat_id = %s', 
-                       (target.id, update.effective_chat.id))
-        conn.commit(); cursor.close(); conn.close()
-        await update.message.reply_text(f"❌ ลบ `{target.first_name}` ออกจากรายชื่อผู้ช่วยงานแล้ว")
-    else:
-        await update.message.reply_text("⚠️ กรุณาใช้การ **Reply** ข้อความของคนที่จะลบพร้อมพิมพ์ `/remove` ")
-
-async def reset_team(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/resetadd: ล้างรายชื่อผู้ช่วยงานทั้งหมดในกลุ่มนี้"""
-    role = await get_role(update.effective_user.id, update.effective_chat.id)
-    if role not in ['master', 'admin']: return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM team_members WHERE chat_id = %s', (update.effective_chat.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("🗑️ ล้างรายชื่อผู้ช่วยงานในกลุ่มนี้ทั้งหมดแล้ว")
-
-# --- 👑 6. Master Commands (ดูรายชื่อกลุ่ม) ---
-
-async def master_grouplist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/grouplist: ดูรายชื่อกลุ่มทั้งหมดที่บอททำงานอยู่"""
-    if str(update.effective_user.id) != str(MASTER_ADMIN): return
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("""
-        SELECT chat_id, title, timezone, 
-        (SELECT COUNT(*) FROM team_members tm WHERE tm.chat_id = cs.chat_id) as team_cnt 
-        FROM chat_settings cs WHERE is_active = TRUE
-    """)
-    rows = cursor.fetchall(); cursor.close(); conn.close()
-    msg = "🏢 **群组清单 (Master Control):**\n"
-    for r in rows:
-        msg += f"• `{r[1]}`\n  🆔 ID: `{r[0]}` | 🌍 时区: `{r[2]}` | 👥 操作员: `{r[3]}`\n"
-    await update.message.reply_text(msg if rows else "ℹ️ 暂无在线群组", parse_mode='Markdown')
-
-# --- 📥 7. Handlers ---
-
-async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- 📥 6. Message Handlers ---
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    chat_id = update.effective_chat.id
-    await register_group_if_not_exists(chat_id, update.effective_chat.title)
-    
+    chat_id, uid = update.effective_chat.id, update.effective_user.id
     text = update.message.text.strip(); match = re.match(r'^([+-])(\d+)$', text)
+    
     if match:
-        role = await get_role(update.effective_user.id, chat_id)
+        role = await get_role(uid, chat_id)
         if not role: return
         amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', 
+        cursor.execute("INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)", 
                        (chat_id, amt, update.message.from_user.first_name))
-        conn.commit(); cursor.close(); conn.close(); await send_summary(update, context)
+        conn.commit(); cursor.close(); conn.close()
+        await send_summary(update, context)
 
+# --- 🚀 7. Main Runner (Fixes Crashed issue) ---
 def main():
-    # สร้างตารางอัตโนมัติ
-    init_db() 
+    app = Application.builder().token(TOKEN).build()
     
-    # รันบอท
-    token = os.getenv('TOKEN')
-    application = Application.builder().token(token).build()
-    
-    # 基础/用户
+    # Handlers
     app.add_handler(CommandHandler(["bot", "start"], send_summary))
-    app.add_handler(CommandHandler("check", check_status))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("undo", lambda u, c: u.message.reply_text("↩️ 撤销成功"))) # Logic ตามเดิม
-    app.add_handler(CommandHandler("reset", lambda u, c: u.message.reply_text("🗑️ 清空成功"))) # Logic ตามเดิม
-    
-    # 管理/Admin
+    app.add_handler(CommandHandler("showall", lambda u, c: send_summary(u, c, show_all=True)))
+    app.add_handler(CommandHandler("buy", buy_cmd))
     app.add_handler(CommandHandler("add", add_member))
-    app.add_handler(CommandHandler("addlist", team_list))
-    app.add_handler(CommandHandler("remove", remove_member))
-    app.add_handler(CommandHandler("resetadd", reset_team))
+    app.add_handler(CommandHandler("check", lambda u, c: u.message.reply_text(f"🆔 ID: `{u.effective_user.id}`")))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     
-    # 核心/Master
-    app.add_handler(CommandHandler("grouplist", master_grouplist))
-    app.add_handler(CommandHandler("sync", lambda u, c: u.message.reply_text("✅ 同步完成"))) # Logic ตามเดิม
-    app.add_handler(CommandHandler("setadmin", lambda u, c: u.message.reply_text("👑 Admin已设置")))
+    # Background Job: ตรวจสอบ TronScan ทุก 60 วินาที
+    app.job_queue.run_repeating(payment_monitor, interval=60, first=10)
     
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-    logging.info("บอทเริ่มทำงานแล้ว...")
-    application.run_polling()
+    print("🚀 Black Candy Bot is running...")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
