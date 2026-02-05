@@ -60,35 +60,29 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     today_str = now_local.strftime('%Y-%m-%d')
     
     conn = get_db_connection(); cursor = conn.cursor()
+    # ดึงข้อมูลพร้อมปรับโซนเวลาด้วย SQL เพื่อความแม่นยำสูงสุด
     cursor.execute("""
         SELECT amount, user_name, (timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval) as local_ts 
-        FROM history WHERE chat_id = %s 
+        FROM history 
+        WHERE chat_id = %s 
         AND TO_CHAR(timestamp AT TIME ZONE 'UTC' + ( (SELECT timezone FROM chat_settings WHERE chat_id = %s) || ' hours')::interval, 'YYYY-MM-DD') = %s 
         ORDER BY timestamp ASC
     """, (chat_id, chat_id, chat_id, today_str))
     
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
-    
-    # จัดระเบียบช่องไฟด้วย Monospace Code Block
-    history_text = "```\n"
-    history_text += f"{'#'.ljust(3)} {'时间'.ljust(5)} {'金额'.ljust(8)} {'姓名'}\n"
-    history_text += "--------------------------\n"
-    if not show_all and count > 6: history_text += "...\n"
+    history_text = "📋 **รายการทั้งหมดของวันนี้:**\n" if show_all else ("...\n" if count > 6 else "")
     
     for i, r in enumerate(display_rows):
-        num = str((count - len(display_rows) + i + 1)).ljust(3)
-        time_str = r[2].strftime('%H:%M').ljust(5)
-        amt_str = f"{'+' if r[0] > 0 else ''}{r[0]}".ljust(8)
-        history_text += f"{num} {time_str} {amt_str} {r[1]}\n"
-    history_text += "```"
-
+        num = (count - len(display_rows) + i + 1)
+        time_str = r[2].strftime('%H:%M')
+        history_text += f"{num}. {time_str} | {'+' if r[0] > 0 else ''}{r[0]} ({r[1]})\n"
+    
     cursor.close(); conn.close()
     await update.message.reply_text(
-        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: `{total}`**",
-        parse_mode='MarkdownV2'
+        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **ยอดรวม: {total}**",
+        parse_mode='Markdown'
     )
-    
 # --- 🤖 5. คำสั่งจัดการบัญชี (Accounting) ---
 async def help_cmd(update, context):
     msg = ("📖 **黑糖果机器人说明**\n━━━━━━━━━━━━━━━\n"
