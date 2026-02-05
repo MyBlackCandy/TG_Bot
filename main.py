@@ -71,7 +71,7 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     
     rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     display_rows = rows if show_all else (rows[-6:] if count > 6 else rows)
-    history_text = "📋 **รายการทั้งหมดของวันนี้:**\n" if show_all else ("...\n" if count > 6 else "")
+    history_text = "📋 **今日记录:**\n" if show_all else ("...\n" if count > 6 else "")
     
     for i, r in enumerate(display_rows):
         num = (count - len(display_rows) + i + 1)
@@ -80,12 +80,15 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     
     cursor.close(); conn.close()
     await update.message.reply_text(
-        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **ยอดรวม: {total}**",
+        f"🍎 **今日账目 ({today_str})**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**",
         parse_mode='Markdown'
     )
 # --- 🤖 5. คำสั่งจัดการบัญชี (Accounting) ---
 async def help_cmd(update, context):
     msg = ("📖 **黑糖果机器人说明**\n━━━━━━━━━━━━━━━\n"
+           "• **需要开通请联系** `@Mbcdcandy` 70 U 使用期 30 天\n"
+           "\t可以联系 `@Mbcdcandy` 开通试用期\n"
+
            "💰 **登记方式** 输入 `+100` 或 `-50` 机器人会自动登记\n\n"
            "⚙️ **操控指令:**\n"
            "• `/bot` : 查看目前账单\n"
@@ -94,7 +97,7 @@ async def help_cmd(update, context):
            "• `/showall` : 查看所有登记\n"
            "• `/settime [+/-数字]` : 设置登记时间 (如 `/settime +8`)\n\n"
            "👥 **人员设置:**\n"
-           "• `/add` : 增加操作者 (Reply 对方)\n"
+           "• `/add` : 增加操作者 先需要设置的人发信息然后在用回复的方式 回复 /add 的指令\n"
            "• `/addlist` : 查看操作者名单\n"
            "• `/resetadd` : 清除所有操作者\n\n"
            "👑 **管理员:**\n"
