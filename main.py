@@ -185,9 +185,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                        (chat_id, amt, update.message.from_user.first_name))
         conn.commit(); cursor.close(); conn.close(); await send_summary(update, context)
 
-if __name__ == '__main__':
-    init_db()
-    app = Application.builder().token(os.getenv('TOKEN')).build()
+def main():
+    # สร้างตารางอัตโนมัติ
+    init_db() 
+    
+    # รันบอท
+    token = os.getenv('TOKEN')
+    application = Application.builder().token(token).build()
     
     # 基础/用户
     app.add_handler(CommandHandler(["bot", "start"], send_summary))
@@ -208,4 +212,8 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("setadmin", lambda u, c: u.message.reply_text("👑 Admin已设置")))
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-    app.run_polling()
+    logging.info("บอทเริ่มทำงานแล้ว...")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
