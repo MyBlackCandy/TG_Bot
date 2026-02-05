@@ -2,155 +2,136 @@ import os
 import re
 from datetime import datetime
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ChatMemberHandler
-import database as db
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from database import init_db, get_db_connection
 
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+# ดึงค่าแอดมินหลักจาก Environment Variable (ต้องตั้งใน Railway)
+MASTER_ADMIN = os.getenv('ADMIN_ID')
 
-def format_history(logs):
-    if not logs: return "ยังไม่มีรายการ"
-    count = len(logs)
-    lines = [f"{i+1}. {log['amount']:+d} (@{log['username']})" for i, log in enumerate(logs)]
-    if count <= 6: return "\n".join(lines)
-    # แสดง 3 อันแรก และ 3 อันสุดท้ายตามเงื่อนไขที่ตั้งไว้
-    return "\n".join(lines[:3]) + "\n... (ย่อรายการ) ...\n" + "\n".join(lines[-3:])
+# --- 🛡️ ฟังก์ชันตรวจสอบสิทธิ์ ---
+async def check_access(user_id, chat_id):
+    if str(user_id) == str(MASTER_ADMIN): return True
+    conn = get_db_connection(); cursor = conn.cursor()
+    # เช็กสมาชิกที่ยังไม่หมดอายุ
+    cursor.execute('SELECT 1 FROM customers WHERE user_id = %s AND expire_date > CURRENT_TIMESTAMP', (user_id,))
+    if cursor.fetchone(): 
+        cursor.close(); conn.close(); return True
+    # เช็กสิทธิ์ลูกทีมในกลุ่มนี้
+    cursor.execute('SELECT 1 FROM team_members WHERE member_id = %s AND allowed_chat_id = %s', (user_id, chat_id))
+    res = cursor.fetchone(); cursor.close(); conn.close()
+    return True if res else False
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# --- 📊 ฟังก์ชันสรุปยอด (ย่อรายการเมื่อเกิน 6) ---
+async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    role = db.get_user_role(chat_id, user_id)
-    if user_id == ADMIN_ID or db.is_global_user(user_id) or role:
-        await update.message.reply_text("✨ บอทพร้อมทำงานแล้ว!")
-    else:
-        await update.message.reply_text("❌ คุณยังไม่มีสิทธิการใช้งาน โปรดติดต่อแอดมิน")
-
-async def handle_record(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    username = update.effective_user.username or str(user_id)
-    text = update.message.text
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
+    rows = cursor.fetchall(); total = sum(r[0] for r in rows); count = len(rows)
     
-    match = re.match(r'^([+-])(\d+)$', text)
-    if not match: return
+    if count == 0:
+        return await update.message.reply_text("📋 **当前无记录 (ยังไม่มีรายการ)**")
 
-    # ระบบ Auto-Wakeup: ถ้าคนพิมพ์คือคนมีสิทธิ์แต่กลุ่มยังไม่ลงทะเบียน ให้ตั้งเป็นเจ้าของทันที
-    if not db.get_user_role(chat_id, user_id) and (db.is_global_user(user_id) or user_id == ADMIN_ID):
-        db.set_group_permission(chat_id, user_id, username, 'owner')
-
-    role = db.get_user_role(chat_id, user_id)
-    if user_id == ADMIN_ID: role = 'admin'
+    # ✅ ระบบย่อรายการ: แสดงแค่ 6 รายการล่าสุด
+    history_text = "...\n" if count > 6 else ""
+    display_rows = rows[-6:] if count > 6 else rows
+    start_num = max(1, count - 5) if count > 6 else 1
     
-    if not role:
-        await update.message.reply_text("❌ ไม่มีสิทธิ์ใช้งานในกลุ่มนี้ โปรดติดต่อแอดมิน")
-        return
-
-    # บันทึกยอดและแสดงสรุป
-    db.save_transaction(chat_id, user_id, username, int(text))
-    logs = db.get_logs(chat_id)
-    total = sum(log['amount'] for log in logs)
-    await update.message.reply_text(
-        f"✅ บันทึก: {text}\n\n{format_history(logs)}\n\n💰 ยอดรวม: {total:,.0f}", 
-        parse_mode='Markdown'
-    )
-
-async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    sub = db.get_subscription(user_id)
-    res = f"🔍 ID: `{user_id}`\n"
-    if user_id == ADMIN_ID:
-        res += "👑 สถานะ: แอดมินสูงสุด"
-    elif sub:
-        now = datetime.now()
-        diff = sub['expiry_date'] - now
-        if diff.total_seconds() > 0:
-            res += f"✅ สถานะ: ผู้ใช้งาน\n⏳ คงเหลือ: {diff.days} วัน {diff.seconds//3600} ชม. { (diff.seconds//60)%60 } นาที"
-        else:
-            res += "🔴 สถานะ: หมดอายุแล้ว"
-    else:
-        res += "❌ ไม่มีสิทธิ์ใช้งาน"
-    await update.message.reply_text(res, parse_mode='Markdown')
-
-async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    last = db.get_last_transaction(chat_id)
-    if not last: return await update.message.reply_text("❌ ไม่พบรายการ")
+    for i, r in enumerate(display_rows):
+        sign = "+" if r[0] > 0 else ""
+        history_text += f"{start_num + i}. {sign}{r[0]} ({r[1]})\n"
     
-    role = db.get_user_role(chat_id, user_id)
-    if user_id == ADMIN_ID: role = 'admin'
-    
-    # คนช่วยงานยกเลิกได้เฉพาะของตัวเอง
-    if role == 'helper' and last['user_id'] != user_id:
-        await update.message.reply_text("❌ ลบได้เฉพาะรายการของตัวเอง")
-    elif role in ['admin', 'owner', 'helper']:
-        db.delete_transaction(last['id'])
-        await update.message.reply_text(f"🔄 ยกเลิกรายการ {last['amount']} สำเร็จ")
+    cursor.close(); conn.close()
+    msg = f"📊 **账目汇总**\n━━━━━━━━━━━━━━━\n{history_text}━━━━━━━━━━━━━━━\n💰 **总额: {total}**"
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
-async def on_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.my_chat_member.new_chat_member.status == "member":
-        await context.bot.send_message(
-            update.effective_chat.id, 
-            "⚠️ บอทเข้ากลุ่มแล้ว! รอผู้ใช้งานที่มีสิทธิ์เริ่มพิมพ์ข้อความเพื่อเปิดระบบ"
-        )
+# --- 🤖 คำสั่งบอท ---
 
-# --- คำสั่งจัดการทีม ---
-async def add_helper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(update, context):
+    msg = ("📖 **黑糖果机器人使用说明**\n"
+           "━━━━━━━━━━━━━━━\n"
+           "💰 **จดบัญชี:** พิมพ์ `+100` หรือ `-50` ในกลุ่ม\n"
+           "📋 **คำสั่งพื้นฐาน:**\n"
+           "• `/show` : ดูสรุปยอดปัจจุบัน\n"
+           "• `/undo` : ยกเลิกรายการล่าสุด (และโชว์ยอดใหม่)\n"
+           "• `/reset` : ล้างบัญชีทั้งหมดในกลุ่ม\n"
+           "• `/check` : เช็กวันหมดอายุและ ID\n\n"
+           "👥 **จัดการทีม:**\n"
+           "• Reply + `/add` : เพิ่มคนช่วยจด\n"
+           "• Reply + `/remove` : ลบคนช่วยจด")
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def undo_last(update, context):
+    if not await check_access(update.message.from_user.id, update.effective_chat.id): return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)', (update.effective_chat.id,))
+    conn.commit(); cursor.close(); conn.close()
+    await update.message.reply_text("↩️ **已撤销上一条记录 (ยกเลิกแล้ว)**")
+    await send_summary(update, context) # ✅ ส่งสรุปยอดใหม่ทันที
+
+async def add_member(update, context):
     if not update.message.reply_to_message:
-        return await update.message.reply_text("⚠️ โปรด Reply ข้อความของคนช่วยงาน")
+        return await update.message.reply_text("⚠️ 请回复操作者的信息 (โปรด Reply ข้อความคนที่ต้องการเพิ่ม)")
+    if not await check_access(update.message.from_user.id, update.effective_chat.id): return
     target = update.message.reply_to_message.from_user
-    db.set_group_permission(update.effective_chat.id, target.id, target.username, 'helper')
-    await update.message.reply_text(f"✅ เพิ่ม @{target.username} เป็นคนช่วยงานแล้ว")
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('INSERT INTO team_members (member_id, allowed_chat_id) VALUES (%s, %s) ON CONFLICT DO NOTHING', (target.id, update.effective_chat.id))
+    conn.commit(); cursor.close(); conn.close()
+    await update.message.reply_text(f"✅ 已增加操作者: {target.first_name}")
 
-# --- คำสั่งสำหรับ Admin ---
+async def reset_history(update, context):
+    if not await check_access(update.message.from_user.id, update.effective_chat.id): return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('DELETE FROM history WHERE chat_id = %s', (update.effective_chat.id,))
+    conn.commit(); cursor.close(); conn.close()
+    await update.message.reply_text("🧹 **已清除所有数据 (Reset แล้ว)**")
 
-async def admin_set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    
+async def check_status(update, context):
+    uid = update.effective_user.id
+    if str(uid) == str(MASTER_ADMIN): return await update.message.reply_text("👑 **MASTER ADMIN**")
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT expire_date FROM customers WHERE user_id = %s', (uid,))
+    res = cursor.fetchone(); cursor.close(); conn.close()
+    msg = f"👤 ID: `{uid}`\n📅 到期: `{res[0].strftime('%Y-%m-%d %H:%M')}`" if res else f"👤 ID: `{uid}`\n❌ 未开通 (ยังไม่เปิดสมาชิก)"
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def set_admin_manual(update, context):
+    """/setadmin [ID] [Days] - แอดมินหลักใช้เพิ่มวันสมาชิก"""
+    if str(update.message.from_user.id) != str(MASTER_ADMIN): return
     try:
-        username = context.args[0].replace("@", "")
-        days = int(context.args[1])
-        
-        # ค้นหา user_id จากฐานข้อมูลที่เคยบันทึกไว้ (ถ้ามี)
-        # ในระบบนี้เราจะอัปเดตผ่าน username ที่เคยพิมพ์เข้ามา
-        db.add_subscription_by_username(username, days)
-        await update.message.reply_text(f"✅ อนุมัติสิทธิ์ให้ @{username} ใช้งานได้เพิ่ม {days} วันเรียบร้อย!")
-    except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ รูปแบบ: `/setuser @username [จำนวนวัน]`")
+        uid, days = int(context.args[0]), int(context.args[1])
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute("INSERT INTO customers (user_id, expire_date) VALUES (%s, CURRENT_TIMESTAMP + interval '%s day') ON CONFLICT (user_id) DO UPDATE SET expire_date = EXCLUDED.expire_date", (uid, days))
+        conn.commit(); cursor.close(); conn.close()
+        await update.message.reply_text(f"👑 **Admin Set:** ID {uid} (+{days} วัน)")
+    except: await update.message.reply_text("รูปแบบ: `/setadmin [ID] [วัน]`")
 
-async def admin_list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    
-    users = db.get_all_users()
-    if not users: return await update.message.reply_text("ยังไม่มีผู้ใช้งานในระบบ")
-    
-    msg = "📋 **รายชื่อผู้ใช้งานบอท:**\n"
-    for u in users:
-        status = "✅" if u['expiry_date'] > datetime.now() else "🔴"
-        msg += f"{status} @{u['username']} - หมดอายุ: {u['expiry_date'].strftime('%d/%m/%Y')}\n"
-    
-    await update.message.reply_text(msg, parse_mode='Markdown')
+async def handle_accounting(update, context):
+    if not update.message or not update.message.text: return
+    text = update.message.text.strip(); match = re.match(r'^([+-])(\d+)$', text)
+    if match:
+        if not await check_access(update.message.from_user.id, update.effective_chat.id): return
+        amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (update.effective_chat.id, amt, update.message.from_user.first_name))
+        conn.commit(); cursor.close(); conn.close()
+        await send_summary(update, context)
 
-async def admin_list_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    
-    groups = db.get_all_groups()
-    msg = f"📍 **บอททำงานอยู่ใน {len(groups)} กลุ่ม:**\n"
-    for g in groups:
-        msg += f"• ID: `{g['group_id']}` (เจ้าของ: @{g['username']})\n"
-    
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
+# --- 🚀 RUN BOT ---
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check))
-    app.add_handler(CommandHandler("undo", undo))
-    app.add_handler(CommandHandler("add", add_helper))
-    app.add_handler(CommandHandler("reset", lambda u, c: db.clear_transactions(u.effective_chat.id) or u.message.reply_text("🗑 รีเซ็ตยอดแล้ว")))
-    app.add_handler(CommandHandler("resetadd", lambda u, c: db.clear_helpers(u.effective_chat.id) or u.message.reply_text("👥 ล้างคนช่วยงานแล้ว")))
-    app.add_handler(ChatMemberHandler(on_join, ChatMemberHandler.MY_CHAT_MEMBER))
-    app.add_handler(CommandHandler("setuser", admin_set_user))
-    app.add_handler(CommandHandler("userlist", admin_list_users))
-    app.add_handler(CommandHandler("grouplist", admin_list_groups))
-    app.add_handler(MessageHandler(filters.Regex(r'^[+-]\d+$'), handle_record))
+    init_db()
+    app = Application.builder().token(os.getenv('TOKEN')).build()
+    
+    # ⚠️ เรียงลำดับคำสั่ง (CommandHandler ต้องอยู่ก่อน MessageHandler)
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("show", send_summary))
+    app.add_handler(CommandHandler("undo", undo_last))
+    app.add_handler(CommandHandler("reset", reset_history))
+    app.add_handler(CommandHandler("add", add_member))
+    app.add_handler(CommandHandler("check", check_status))
+    app.add_handler(CommandHandler("setadmin", set_admin_manual))
+    
+    # ดักจับตัวเลขจดบัญชี
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_accounting))
+    
+    print("Bot is ready (Accounting Stable Mode)")
     app.run_polling()
