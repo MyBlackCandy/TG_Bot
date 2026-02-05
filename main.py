@@ -1,90 +1,79 @@
-import os
-import re
-import sys
-import logging
-import psycopg2
+import os, re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
-# ตั้งค่า Logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+from database import get_db_connection, get_user_role, get_user_info
 
 TOKEN = os.getenv('TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')
+MASTER_ID = os.getenv('ADMIN_ID')
 
-if not TOKEN or not DATABASE_URL:
-    print("❌ ERROR: TOKEN or DATABASE_URL is missing")
-    sys.exit(1)
-
-def get_db_connection():
-    url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    return psycopg2.connect(url, sslmode='require')
-
-def init_db():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        # สร้างตารางใหม่ที่มีคอลัมน์ครบถ้วน (chat_id และ user_name)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS history (
-                id SERIAL PRIMARY KEY,
-                chat_id BIGINT,
-                amount INTEGER,
-                user_name TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print("✅ Database Ready")
-    except Exception as e:
-        print(f"❌ DB Error: {e}")
-
-async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text: return
+# --- 🆔 คำสั่งเช็ค ID และสถานะตัวเอง ---
+async def check_self(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    name = update.effective_user.first_name
+    expire_date = get_user_info(uid)
     
-    text = update.message.text.strip()
-    chat_id = update.effective_chat.id
-    user_name = update.message.from_user.first_name
+    status = "❌ ไม่มีแพ็กเกจ"
+    if str(uid) == str(MASTER_ID):
+        status = "👑 Master Admin"
+    elif expire_date:
+        if expire_date > datetime.utcnow():
+            status = f"✅ Admin (หมดอายุ: {expire_date.strftime('%Y-%m-%d')})"
+        else:
+            status = f"⚠️ หมดอายุเมื่อ: {expire_date.strftime('%Y-%m-%d')}"
 
-    # ตรวจจับ + หรือ - ตามด้วยตัวเลข
+    msg = (f"👤 **ข้อมูลผู้ใช้**\n"
+           f"━━━━━━━━━━━━━━━\n"
+           f"ชื่อ: {name}\n"
+           f"ไอดี: `{uid}` (แตะเพื่อก๊อปปี้)\n"
+           f"สถานะ: {status}\n"
+           f"━━━━━━━━━━━━━━━\n"
+           f"💡 ส่งไอดีนี้ให้มาสเตอร์เพื่อต่ออายุ")
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+# --- 🗑️ คำสั่งลบรายการ (เฉพาะ Master/Admin) ---
+async def delete_ops(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    role = get_user_role(update.effective_user.id, update.effective_chat.id)
+    if role not in ['master', 'admin']: return
+
+    cmd = update.message.text.split()[0]
+    conn = get_db_connection(); cursor = conn.cursor()
+
+    if "/del" in cmd: # ลบรายการล่าสุด
+        cursor.execute("DELETE FROM history WHERE id = (SELECT id FROM history WHERE chat_id = %s ORDER BY timestamp DESC LIMIT 1)", (update.effective_chat.id,))
+        await update.message.reply_text("🗑 ลบรายการล่าสุดเรียบร้อย")
+    elif "/clear" in cmd: # ลบทั้งหมดของวันนี้
+        cursor.execute("DELETE FROM history WHERE chat_id = %s AND timestamp::date = CURRENT_DATE", (update.effective_chat.id,))
+        await update.message.reply_text("🧹 ล้างรายการทั้งหมดของวันนี้แล้ว")
+    
+    conn.commit(); cursor.close(); conn.close()
+
+# --- ระบบบันทึกยอด ---
+async def handle_accounting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
     match = re.match(r'^([+-])(\d+)$', text)
     if match:
-        val = int(match.group(2))
-        amount = val if match.group(1) == '+' else -val
-
-        # บันทึกลงฐานข้อมูล
+        role = get_user_role(update.effective_user.id, update.effective_chat.id)
+        if not role: return
+        
+        amt = int(match.group(2)) if match.group(1) == '+' else -int(match.group(2))
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute('INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)', (chat_id, amount, user_name))
-        conn.commit()
-        
-        # ดึงประวัติมาแสดง
-        cursor.execute('SELECT amount, user_name FROM history WHERE chat_id = %s ORDER BY timestamp ASC', (chat_id,))
-        rows = cursor.fetchall(); cursor.close(); conn.close()
-        
-        total = sum(r[0] for r in rows)
-        count = len(rows)
-        res = "📋 AK机器人:记录\n"
-        
-        display = rows[-10:] if count > 10 else rows
-        if count > 10: res += "...\n"
-        for i, (v, name) in enumerate(display, (count-9 if count > 10 else 1)):
-            res += f"{i}. {'+' if v > 0 else ''}{v} ({name})\n"
-        
-        res += f"----------------\n📊 全部: {count}\n💰 总金额: {total}"
-        await update.message.reply_text(res)
+        cursor.execute("INSERT INTO history (chat_id, amount, user_name) VALUES (%s, %s, %s)", 
+                       (update.effective_chat.id, amt, update.effective_user.first_name))
+        conn.commit(); cursor.close(); conn.close()
+        await update.message.reply_text(f"📝 บันทึก {amt} เรียบร้อย")
 
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM history WHERE chat_id = %s', (chat_id,))
-    conn.commit(); cursor.close(); conn.close()
-    await update.message.reply_text("🧹 已清理数据!")
+def main():
+    app = Application.builder().token(TOKEN).build()
+    
+    # เพิ่มคำสั่งต่างๆ
+    app.add_handler(CommandHandler(["id", "check", "start"], check_self))
+    app.add_handler(CommandHandler(["del", "clear"], delete_ops))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_accounting))
+    
+    # อย่าลืม Handler สำหรับ /setuser และ /add จากโค้ดก่อนหน้า
+    # ...
+    
+    app.run_polling()
 
 if __name__ == '__main__':
-    init_db()
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc))
-    app.run_polling()
+    main()
