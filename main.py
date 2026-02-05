@@ -104,7 +104,8 @@ async def help_cmd(update, context):
            #"👑 **管理员:**\n"
            #
            #"• /setadmin [ID/Reply] [天] : 增加管理期限\n"
-           #"• /setlist : 查看所有管理员")
+           #"• /setlist : 查看所有管理员"
+          )
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def undo_last(update, context):
