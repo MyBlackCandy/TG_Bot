@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-
+from decimal import Decimal
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -209,9 +209,9 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
         await update.message.reply_text("📋 今天没有记录")
         return
 
-    total = sum(r[0] for r in rows)
-    income = sum(r[0] for r in rows if r[0] > 0)
-    expense = sum(r[0] for r in rows if r[0] < 0)
+    total = sum(Decimal(r[0]) for r in rows)
+    income = sum(Decimal(r[0]) for r in rows if r[0] > 0)
+    expense = sum(Decimal(r[0]) for r in rows if r[0] < 0)
 
     display = rows if show_all else rows[-6:]
 
@@ -233,12 +233,22 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_operator(update):
         return
 
-    match = re.match(r'^([+-])\s*(\d+)$', update.message.text.strip())
+    text = update.message.text.strip()
+
+    # รองรับ +1,000.50 หรือ -2,500
+    match = re.match(r'^([+-])\s*([\d,]+(?:\.\d{1,2})?)$', text)
     if not match:
         return
 
-    amount = int(match.group(2))
-    if match.group(1) == "-":
+    sign = match.group(1)
+    number_str = match.group(2)
+
+    # ลบ comma ออกก่อน
+    number_str = number_str.replace(",", "")
+
+    amount = Decimal(number_str)
+
+    if sign == "-":
         amount = -amount
 
     conn = get_db_connection()
