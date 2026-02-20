@@ -443,7 +443,32 @@ async def renew_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ 已续费 {days} 天\n到期时间: {new_expire.strftime('%Y-%m-%d %H:%M')}"
     )
+# ==============================
+# 帮助菜单
+# ==============================
 
+async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📖 机器人指令说明\n"
+        "━━━━━━━━━━━━━━━\n"
+        "/开始 - 查看系统状态\n"
+        "/账单 - 查看当前账单\n"
+        "/全部 - 显示所有记录\n"
+        "/撤销 - 撤销上一条记录\n"
+        "/重置 - 清空本轮记录\n"
+        "\n"
+        "👥 管理功能（Owner）\n"
+        "/添加 - 添加操作者（回复成员）\n"
+        "/删除 - 删除操作者（回复成员）\n"
+        "/设置时区 +8\n"
+        "/设置时间 14:00\n"
+        "\n"
+        "👑 Master 专用\n"
+        "/续费 用户ID 天数\n"
+        "━━━━━━━━━━━━━━━"
+    )
+
+    await update.message.reply_text(text)
 # ==============================
 # 启动
 # ==============================
@@ -454,16 +479,54 @@ if __name__ == "__main__":
     app = Application.builder().token(TOKEN).build()
 
     # 中文命令处理
+    # ==============================
+
+
+    # 状态
+    app.add_handler(CommandHandler("start", start_bot))
     app.add_handler(MessageHandler(filters.Regex(r"^/开始$"), start_bot))
+
+    # 帮助
+    app.add_handler(CommandHandler("help", help_menu))
+    app.add_handler(MessageHandler(filters.Regex(r"^/帮助$"), help_menu))
+
+    # 账单
+    app.add_handler(CommandHandler("report", send_summary))
     app.add_handler(MessageHandler(filters.Regex(r"^/账单$"), send_summary))
+
+    # 全部
+    app.add_handler(CommandHandler("all", lambda u, c: send_summary(u, c, show_all=True)))
     app.add_handler(MessageHandler(filters.Regex(r"^/全部$"), lambda u, c: send_summary(u, c, show_all=True)))
+
+    # 撤销
+    app.add_handler(CommandHandler("undo", undo_last))
     app.add_handler(MessageHandler(filters.Regex(r"^/撤销$"), undo_last))
+
+    # 重置
+    app.add_handler(CommandHandler("reset", reset_current))
     app.add_handler(MessageHandler(filters.Regex(r"^/重置$"), reset_current))
+
+    # 添加操作者
+    app.add_handler(CommandHandler("add", add_member))
     app.add_handler(MessageHandler(filters.Regex(r"^/添加$"), add_member))
+
+    # 删除操作者
+    app.add_handler(CommandHandler("remove", remove_member))
     app.add_handler(MessageHandler(filters.Regex(r"^/删除$"), remove_member))
+
+    # 设置时区
+    app.add_handler(CommandHandler("timezone", set_timezone))
     app.add_handler(MessageHandler(filters.Regex(r"^/设置时区"), set_timezone))
+
+    # 设置工作时间
+    app.add_handler(CommandHandler("worktime", set_worktime))
     app.add_handler(MessageHandler(filters.Regex(r"^/设置时间"), set_worktime))
+
+    # 续费
+    app.add_handler(CommandHandler("renew", renew_owner))
     app.add_handler(MessageHandler(filters.Regex(r"^/续费"), renew_owner))
+
+
 
     # 普通文本记账
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
