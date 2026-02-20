@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -81,7 +82,31 @@ async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(text)
+# ==============================
+# 帮助菜单
+# ==============================
 
+async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📖 机器人指令说明\n"
+        "━━━━━━━━━━━━━━━\n"
+        "/start 或 /开始 - 查看系统状态\n"
+        "/report 或 /账单 - 查看当前账单\n"
+        "/all 或 /全部 - 查看全部记录\n"
+        "/undo 或 /撤销 - 撤销上一条\n"
+        "/reset 或 /重置 - 重置当前轮次\n"
+        "\n"
+        "👥 Owner 功能\n"
+        "/add 或 /添加\n"
+        "/remove 或 /删除\n"
+        "/timezone 或 /设置时区\n"
+        "/worktime 或 /设置时间\n"
+        "\n"
+        "👑 Master\n"
+        "/renew 或 /续费\n"
+        "━━━━━━━━━━━━━━━"
+    )
+    await update.message.reply_text(text)
 # ==============================
 # 权限系统
 # ==============================
