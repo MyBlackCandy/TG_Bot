@@ -423,6 +423,76 @@ async def set_worktime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(f"✅ 工作时间设置为 {time_str}")
+# ==============================
+# 权限检查
+# ==============================
+
+async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    # Master
+    if await is_master(update):
+        await update.message.reply_text(
+            f"🆔 ID: {user_id}\n"
+            "👑 身份: Master\n"
+            "权限: 最高权限"
+        )
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Owner
+    cursor.execute(
+        "SELECT expire_date FROM admins WHERE user_id=%s",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+
+    if row and row[0] > datetime.utcnow():
+        remaining = row[0] - datetime.utcnow()
+
+        total_seconds = int(remaining.total_seconds())
+
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+
+        cursor.close()
+        conn.close()
+
+        await update.message.reply_text(
+            f"🆔 ID: {user_id}\n"
+            "👑 身份: Owner\n"
+            f"剩余时间: {days} 天 {hours} 小时 {minutes} 分钟"
+        )
+        return
+
+    # Operator
+    cursor.execute("""
+        SELECT 1 FROM team_members
+        WHERE member_id=%s AND chat_id=%s
+    """, (user_id, update.effective_chat.id))
+
+    if cursor.fetchone():
+        cursor.close()
+        conn.close()
+
+        await update.message.reply_text(
+            f"🆔 ID: {user_id}\n"
+            "👥 身份: 操作者"
+        )
+        return
+
+    cursor.close()
+    conn.close()
+
+    # 普通成员
+    await update.message.reply_text(
+        f"🆔 ID: {user_id}\n"
+        "❌ 身份: 普通成员\n"
+        "无操作权限"
+    )
 
 # ==============================
 # Master 续费
@@ -489,6 +559,10 @@ if __name__ == "__main__":
     # 帮助
     app.add_handler(CommandHandler("help", help_menu))
     app.add_handler(MessageHandler(filters.Regex(r"^/帮助$"), help_menu))
+    
+    # 检查
+    app.add_handler(CommandHandler("check", check_status))
+    app.add_handler(MessageHandler(filters.Regex(r"^/检查$"), check_status))
 
     # 账单
     app.add_handler(CommandHandler("report", send_summary))
