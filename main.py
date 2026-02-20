@@ -452,16 +452,18 @@ if __name__ == "__main__":
     init_db()
 
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("开始", start_bot))
-    app.add_handler(CommandHandler("账单", send_summary))
-    app.add_handler(CommandHandler("全部", lambda u, c: send_summary(u, c, show_all=True)))
-    app.add_handler(CommandHandler("撤销", undo_last))
-    app.add_handler(CommandHandler("重置", reset_current))
-    app.add_handler(CommandHandler("添加", add_member))
-    app.add_handler(CommandHandler("删除", remove_member))
-    app.add_handler(CommandHandler("设置时区", set_timezone))
-    app.add_handler(CommandHandler("设置时间", set_worktime))
-    app.add_handler(CommandHandler("续费", renew_owner))
+   # 中文命令处理（使用 Regex）
+
+app.add_handler(MessageHandler(filters.Regex(r"^/开始$"), start_bot))
+app.add_handler(MessageHandler(filters.Regex(r"^/账单$"), send_summary))
+app.add_handler(MessageHandler(filters.Regex(r"^/全部$"), lambda u, c: send_summary(u, c, show_all=True)))
+app.add_handler(MessageHandler(filters.Regex(r"^/撤销$"), undo_last))
+app.add_handler(MessageHandler(filters.Regex(r"^/重置$"), reset_current))
+app.add_handler(MessageHandler(filters.Regex(r"^/添加$"), add_member))
+app.add_handler(MessageHandler(filters.Regex(r"^/删除$"), remove_member))
+app.add_handler(MessageHandler(filters.Regex(r"^/设置时区"), set_timezone))
+app.add_handler(MessageHandler(filters.Regex(r"^/设置时间"), set_worktime))
+app.add_handler(MessageHandler(filters.Regex(r"^/续费"), renew_owner))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
