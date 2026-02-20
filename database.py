@@ -27,7 +27,7 @@ def init_db():
         );
         """)
 
-        # 🔥 自动补充旧数据库缺失字段
+        # 自动补充旧字段（防止旧版本缺失）
         cursor.execute("""
         ALTER TABLE chat_settings
         ADD COLUMN IF NOT EXISTS timezone INTEGER DEFAULT 0;
@@ -39,16 +39,34 @@ def init_db():
         """)
 
         # ==============================
-        # 账单记录
+        # 账单记录（支持小数）
         # ==============================
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS history (
             id SERIAL PRIMARY KEY,
             chat_id BIGINT NOT NULL,
-            amount INTEGER NOT NULL,
+            amount NUMERIC(15,2) NOT NULL,
             user_name TEXT,
             timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+        """)
+
+        # 🔥 如果旧数据库是 INTEGER → 自动升级为 NUMERIC
+        cursor.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name='history'
+                AND column_name='amount'
+                AND data_type='integer'
+            ) THEN
+                ALTER TABLE history
+                ALTER COLUMN amount TYPE NUMERIC(15,2)
+                USING amount::NUMERIC(15,2);
+            END IF;
+        END$$;
         """)
 
         cursor.execute("""
