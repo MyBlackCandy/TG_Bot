@@ -16,6 +16,9 @@ def init_db():
     try:
         cursor = conn.cursor()
 
+        # ==============================
+        # 群组设置
+        # ==============================
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_settings (
             chat_id BIGINT PRIMARY KEY,
@@ -24,6 +27,20 @@ def init_db():
         );
         """)
 
+        # 🔥 自动补充旧数据库缺失字段
+        cursor.execute("""
+        ALTER TABLE chat_settings
+        ADD COLUMN IF NOT EXISTS timezone INTEGER DEFAULT 0;
+        """)
+
+        cursor.execute("""
+        ALTER TABLE chat_settings
+        ADD COLUMN IF NOT EXISTS work_start TIME DEFAULT '00:00';
+        """)
+
+        # ==============================
+        # 账单记录
+        # ==============================
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS history (
             id SERIAL PRIMARY KEY,
@@ -39,6 +56,9 @@ def init_db():
         ON history(chat_id, timestamp);
         """)
 
+        # ==============================
+        # 操作者
+        # ==============================
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS team_members (
             member_id BIGINT,
@@ -48,6 +68,9 @@ def init_db():
         );
         """)
 
+        # ==============================
+        # Owner（有期限）
+        # ==============================
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             user_id BIGINT PRIMARY KEY,
