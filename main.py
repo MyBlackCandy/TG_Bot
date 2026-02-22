@@ -211,7 +211,7 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     # ⭐ จุดสำคัญ: คำนวณเลขเริ่มต้น
     start_index = len(rows) - len(display) + 1
 
-    text = "📋 今天记录:\n━━━━━━━━━━━━━━━\n...\n"
+    text = "📋 今天记录:\n━━━━━━━━━━━━━━━\n"
     for i, r in enumerate(display):
         local_time = r[2] + timedelta(hours=tz)
         text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {r[0]} ({r[1]})\n"
