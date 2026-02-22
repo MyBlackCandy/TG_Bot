@@ -96,8 +96,8 @@ async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👥 Owner 功能\n"
         "/add 或 /添加 - 用回复的方式来回复需要增加的操纵人\n"
         "/remove 或 /删除 - 用回复的方式来回复需要移除的操纵人\n"
-        "/timezone 或 /设置时区 - 设置记账时间 例如：/timezone +8（中国）\n"
-        "/worktime 或 /设置时间 - 设置开始记账到结束的时间 例如：/worktime 14：00\n"
+        "/timezone 或 /设置时区 - 设置记账时间 例如：/timezone +8\n"
+        "/worktime 或 /设置时间 - 设置开始记账到结束的时间 例如：/worktime 14:00\n"
         "━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(text)
@@ -209,13 +209,13 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
 
     display = rows if show_all else rows[-6:]
 
-    text = "📋 本轮记录:\n\n"
+    text = "📋 今天记录:\n\n"
     for i, r in enumerate(display):
         local_time = r[2] + timedelta(hours=tz)
         text += f"{i+1}. {local_time.strftime('%H:%M')} | {r[0]} ({r[1]})\n"
 
     text += "\n━━━━━━━━━━━━━━━\n"
-    text += f"收入: {income}\n支出: {expense}\n净额: {total}"
+    text += f"合计: {total}"
 
     await update.message.reply_text(text)
 
@@ -313,7 +313,7 @@ async def reset_current(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.close()
     conn.close()
 
-    await update.message.reply_text("🗑️ 本轮已重置")
+    await update.message.reply_text("🗑️ 今天已清空")
     await send_summary(update, context)
 
 # ==============================
@@ -343,7 +343,7 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.close()
     conn.close()
 
-    await update.message.reply_text(f"✅ 已添加操作者: {target.first_name}")
+    await update.message.reply_text(f"✅ 已添加操作人: {target.first_name}")
 
 # ==============================
 # 删除操作者
@@ -369,7 +369,7 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.close()
     conn.close()
 
-    await update.message.reply_text(f"🗑️ 已删除操作者: {target.first_name}")
+    await update.message.reply_text(f"🗑️ 已删除操作人: {target.first_name}")
 
 # ==============================
 # 设置时区
