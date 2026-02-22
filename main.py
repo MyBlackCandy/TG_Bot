@@ -74,6 +74,7 @@ async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "今天开始记账至记账结束:\n"
         f"{start_local.strftime('%Y-%m-%d %H:%M')}  →  "
         f"{end_local.strftime('%Y-%m-%d %H:%M')}\n"
+        "━━━━━━━━━━━━━━━"
     )
 
     await update.message.reply_text(text)
@@ -209,7 +210,7 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
 
     display = rows if show_all else rows[-6:]
 
-    text = "📋 今天记录:\n"
+    text = "📋 今天记录:\n━━━━━━━━━━━━━━━\n"
     for i, r in enumerate(display):
         local_time = r[2] + timedelta(hours=tz)
         text += f"{i+1}. {local_time.strftime('%H:%M')} | {r[0]} ({r[1]})\n"
