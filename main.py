@@ -82,6 +82,8 @@ async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(text)
+    await send_summary(update, context)
+    
 # ==============================
 # 帮助菜单
 # ==============================
@@ -97,13 +99,10 @@ async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/reset 或 /重置 - 重置当前轮次\n"
         "\n"
         "👥 Owner 功能\n"
-        "/add 或 /添加\n"
-        "/remove 或 /删除\n"
-        "/timezone 或 /设置时区\n"
-        "/worktime 或 /设置时间\n"
-        "\n"
-        "👑 Master\n"
-        "/renew 或 /续费\n"
+        "/add 或 /添加 - 用回复的方式来回复需要增加的操纵人\n"
+        "/remove 或 /删除 - 用回复的方式来回复需要移除的操纵人\n"
+        "/timezone 或 /设置时区 - 设置记账时间 例如：/timezone +8（中国）\n"
+        "/worktime 或 /设置时间 - 设置开始记账到结束的时间 例如：/worktime 14：00\n"
         "━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(text)
@@ -388,7 +387,7 @@ async def set_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         tz = int(context.args[0])
     except:
-        await update.message.reply_text("用法: /设置时区 +8")
+        await update.message.reply_text("用法: /timezone +8")
         return
 
     conn = get_db_connection()
@@ -417,7 +416,7 @@ async def set_worktime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         time_str = context.args[0]
         datetime.strptime(time_str, "%H:%M")
     except:
-        await update.message.reply_text("用法: /设置时间 14:00")
+        await update.message.reply_text("用法: /worktime 14:00")
         return
 
     conn = get_db_connection()
