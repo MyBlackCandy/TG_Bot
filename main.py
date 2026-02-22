@@ -66,19 +66,14 @@ async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record_status = "有记录 📊" if record_count > 0 else "暂无记录 📭"
 
     text = (
-        "🤖 机器人状态\n"
+        "🤖 机器人已开始记账\n"
         "━━━━━━━━━━━━━━━\n"
-        f"当前时区: UTC{tz:+}\n"
-        f"当前时间: {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"目前时区: UTC{tz:+}\n"
+        f"目前时间: {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
         "\n"
-        "📅 当前工作轮次:\n"
+        "今天开始记账至记账结束:\n"
         f"{start_local.strftime('%Y-%m-%d %H:%M')}  →  "
         f"{end_local.strftime('%Y-%m-%d %H:%M')}\n"
-        "\n"
-        f"操作者数量: {operator_count} 人\n"
-        f"本轮状态: {record_status}\n"
-        "━━━━━━━━━━━━━━━\n"
-        "系统运行正常 ✅"
     )
 
     await update.message.reply_text(text)
