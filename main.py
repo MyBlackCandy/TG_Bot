@@ -207,8 +207,6 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     total = sum(Decimal(r[0]) for r in rows)
 
     display = rows if show_all else rows[-6:]
-
-    # ⭐ จุดสำคัญ: คำนวณเลขเริ่มต้น
     start_index = len(rows) - len(display) + 1
 
     text = "📋 今天记录:\n━━━━━━━━━━━━━━━\n"
@@ -217,10 +215,23 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
         text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {r[0]} ({r[1]})\n"
 
     text += "━━━━━━━━━━━━━━━\n"
-    text += f"合计: {total}"
+    text += f"合计: {total}\n\n"
+
+    # ====== สรุปแยกตามคน ======
+    person_summary = {}
+
+    for amount, user_name, _ in rows:
+        amount = Decimal(amount)
+        if user_name not in person_summary:
+            person_summary[user_name] = {"count": 0, "total": Decimal("0")}
+        person_summary[user_name]["count"] += 1
+        person_summary[user_name]["total"] += amount
+
+    text += "👤 按人统计:\n"
+    for name, data in person_summary.items():
+        text += f"{name} | {data['count']} 笔 | {data['total']}\n"
 
     await update.message.reply_text(text)
-
 # ==============================
 # 记账
 # ==============================
