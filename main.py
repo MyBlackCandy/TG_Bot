@@ -231,31 +231,39 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
 
-    # รองรับ +1,000.50 หรือ -2,500
-    match = re.match(r'^([+-])\s*([\d,]+(?:\.\d{1,2})?)$', text)
+    # ดึงตัวเลข + / -
+    match = re.search(r'([+-])\s*([\d,]+(?:\.\d{1,2})?)', text)
     if not match:
         return
 
     sign = match.group(1)
-    number_str = match.group(2)
-
-    # ลบ comma ออกก่อน
-    number_str = number_str.replace(",", "")
-
+    number_str = match.group(2).replace(",", "")
     amount = Decimal(number_str)
 
     if sign == "-":
         amount = -amount
 
+    # ✅ ถ้าเป็นการ reply → ใช้ชื่อคนที่ถูก reply
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        user_name = target_user.first_name
+    else:
+        # ถ้าไม่ reply → ใช้คนพิมพ์เหมือนเดิม
+        user_name = update.message.from_user.first_name
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO history (chat_id, amount, user_name) VALUES (%s,%s,%s)",
-        (update.effective_chat.id, amount, update.message.from_user.first_name)
+        (update.effective_chat.id, amount, user_name)
     )
     conn.commit()
     cursor.close()
     conn.close()
+
+    # ตอบกลับให้เห็นชัด
+    sign_text = "+" if amount > 0 else ""
+    await update.message.reply_text(f"{sign_text}{amount} {user_name}")
 
     await send_summary(update, context)
 
