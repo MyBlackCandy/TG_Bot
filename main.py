@@ -714,7 +714,7 @@ if __name__ == "__main__":
     # 中文命令处理
     # ==============================
     # 开始
-    app.add_handler(CommandHandler("start", starts_bot))
+    app.add_handler(CommandHandler("start", start_bot))
     # 状态
     app.add_handler(CommandHandler("starts", starts_bot))
     app.add_handler(MessageHandler(filters.Regex(r"^/开始$"), starts_bot))
