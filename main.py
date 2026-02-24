@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+import tempfile
 from decimal import Decimal
 from datetime import datetime, timedelta
 from telegram import Update
@@ -720,9 +721,11 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     now = datetime.utcnow()
 
-    text = "👥 用户列表（按群）\n━━━━━━━━━━━━━━━\n"
+    lines = []
+    lines.append("用户列表（按群）")
+    lines.append("━━━━━━━━━━━━━━━")
 
-    # ===== 取 Owners =====
+    # ===== Owners =====
     cursor.execute("SELECT user_id, expire_date FROM admins ORDER BY expire_date DESC")
     owners = cursor.fetchall()
 
@@ -742,9 +745,9 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             status = "🔴 已过期"
 
-        owners_info.append((name, uid, exp, status))
+        owners_info.append((name, uid, status))
 
-    # ===== 取 Operators 按群 =====
+    # ===== Operators 按群 =====
     cursor.execute("""
         SELECT chat_id, member_id, username
         FROM team_members
@@ -758,36 +761,49 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             groups[chat_id] = []
         groups[chat_id].append((member_id, username))
 
-    # ===== 显示 =====
+    # ===== 生成文本 =====
     for chat_id, members in groups.items():
         try:
             chat = await bot.get_chat(chat_id)
             group_name = chat.title or str(chat_id)
         except:
-            group_name = f"未知群 ({chat_id})"
+            group_name = "未知群"
 
-        text += f"\n🏷 群: {group_name}\n"
+        lines.append(f"\n群: {group_name}")
+        lines.append(f"群ID: {chat_id}")
 
-        # Owners
-        text += "👑 Owners:\n"
+        lines.append("Owners:")
         if owners_info:
-            for name, uid, exp, status in owners_info:
-                text += f"  {name} ({uid}) | {status}\n"
+            for name, uid, status in owners_info:
+                lines.append(f"  {name} ({uid}) | {status}")
         else:
-            text += "  （无）\n"
+            lines.append("  （无）")
 
-        # Operators
-        text += "👥 Operators:\n"
+        lines.append("Operators:")
         if members:
             for mid, uname in members:
-                text += f"  {uname} ({mid})\n"
+                lines.append(f"  {uname} ({mid})")
         else:
-            text += "  （无）\n"
+            lines.append("  （无）")
 
     cursor.close()
     conn.close()
 
-    await update.message.reply_text(text)
+    content = "\n".join(lines)
+
+    # ===== 写入临时文件 =====
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="w", encoding="utf-8") as f:
+        f.write(content)
+        file_path = f.name
+
+    # ===== 发送文件 =====
+    await update.message.reply_document(
+        document=open(file_path, "rb"),
+        filename="users.txt",
+        caption="📄 用户列表（按群）"
+    )
+
+    os.remove(file_path)
 
 
 # ==============================
