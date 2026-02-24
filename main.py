@@ -807,7 +807,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.remove(file_path)
 
 # ==============================
-# Master 选择要清空的群
+# Master 选择要清空的群（显示群名，不在群则显示 chat_id）
 # ==============================
 
 async def clearall_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -817,7 +817,6 @@ async def clearall_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # ดึงรายชื่อ chat ทั้งหมดที่มี history
     cursor.execute("SELECT DISTINCT chat_id FROM history ORDER BY chat_id")
     rows = cursor.fetchall()
     cursor.close()
@@ -828,13 +827,20 @@ async def clearall_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = []
+
     for (chat_id,) in rows:
+        try:
+            chat = await context.bot.get_chat(chat_id)
+            title = chat.title if chat.title else str(chat_id)
+        except:
+            title = str(chat_id)
+
         keyboard.append([
-            InlineKeyboardButton(f"🗑️ 群 {chat_id}", callback_data=f"del:{chat_id}")
+            InlineKeyboardButton(f"🗑️ {title}", callback_data=f"ask:{chat_id}")
         ])
 
     keyboard.append([
-        InlineKeyboardButton("🔥 删除全部", callback_data="del_all"),
+        InlineKeyboardButton("🔥 删除全部", callback_data="ask_all"),
         InlineKeyboardButton("❎ 取消", callback_data="cancel")
     ])
 
@@ -844,7 +850,7 @@ async def clearall_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ==============================
-# 处理按钮
+# 处理清空按钮（双重确认）
 # ==============================
 
 async def clearall_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -859,29 +865,67 @@ async def clearall_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # ❎ cancel
+    # ❎ ยกเลิก
     if data == "cancel":
         await query.edit_message_text("❎ 已取消操作")
         cursor.close(); conn.close()
         return
 
-    # 🔥 delete all
-    if data == "del_all":
+    # ====== ขอ CONFIRM สำหรับกลุ่มเดียว ======
+    if data.startswith("ask:"):
+        chat_id = data.split(":")[1]
+
+        try:
+            chat = await context.bot.get_chat(chat_id)
+            title = chat.title if chat.title else chat_id
+        except:
+            title = chat_id
+
+        keyboard = [
+            [
+                InlineKeyboardButton("⚠️ 确认清空", callback_data=f"confirm:{chat_id}"),
+                InlineKeyboardButton("❎ 取消", callback_data="cancel")
+            ]
+        ]
+
+        await query.edit_message_text(
+            f"⚠️ 确认要清空该群的历史记录吗？\n\n{title}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        cursor.close(); conn.close()
+        return
+
+    # ====== ขอ CONFIRM สำหรับ全部 ======
+    if data == "ask_all":
+        keyboard = [
+            [
+                InlineKeyboardButton("🔥 确认清空全部", callback_data="confirm_all"),
+                InlineKeyboardButton("❎ 取消", callback_data="cancel")
+            ]
+        ]
+        await query.edit_message_text(
+            "⚠️ 确认要清空【所有群】的历史记录吗？",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        cursor.close(); conn.close()
+        return
+
+    # ====== ลบจริง (กลุ่มเดียว) ======
+    if data.startswith("confirm:"):
+        chat_id = data.split(":")[1]
+        cursor.execute("DELETE FROM history WHERE chat_id=%s", (chat_id,))
+        conn.commit()
+        await query.edit_message_text("🗑️ 已清空该群的历史记录")
+        cursor.close(); conn.close()
+        return
+
+    # ====== ลบจริง (ทั้งหมด) ======
+    if data == "confirm_all":
         cursor.execute("DELETE FROM history")
         conn.commit()
         await query.edit_message_text("🔥 已清空【全部群】的历史记录")
         cursor.close(); conn.close()
         return
-
-    # 🗑️ delete one chat
-    if data.startswith("del:"):
-        chat_id = data.split(":")[1]
-        cursor.execute("DELETE FROM history WHERE chat_id=%s", (chat_id,))
-        conn.commit()
-        await query.edit_message_text(f"🗑️ 已清空 群 {chat_id} 的历史记录")
-        cursor.close(); conn.close()
-        return
-
 
 # ==============================
 # 启动
