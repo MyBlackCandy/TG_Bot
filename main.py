@@ -451,11 +451,21 @@ async def set_worktime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_owner(update):
         return
 
-    try:
+    # ถ้ามาจาก /worktime ใช้ context.args
+    if context.args:
         time_str = context.args[0]
+    else:
+        # ถ้ามาจาก /设置时间 ดึงจากข้อความเอง
+        parts = update.message.text.split()
+        if len(parts) < 2:
+            await update.message.reply_text("用法: /设置时间 14:00")
+            return
+        time_str = parts[1]
+
+    try:
         datetime.strptime(time_str, "%H:%M")
     except:
-        await update.message.reply_text("用法: /worktime 14:00")
+        await update.message.reply_text("用法: /设置时间 14:00")
         return
 
     conn = get_db_connection()
@@ -467,10 +477,32 @@ async def set_worktime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         DO UPDATE SET work_start=%s
     """, (update.effective_chat.id, time_str, time_str))
     conn.commit()
+
+    # 取出当前时区
+    cursor.execute("SELECT timezone FROM chat_settings WHERE chat_id=%s",
+                   (update.effective_chat.id,))
+    tz = cursor.fetchone()[0]
+
     cursor.close()
     conn.close()
 
-    await update.message.reply_text(f"✅ 工作时间设置为 {time_str}")
+    # 计算目前时间
+    now_utc = datetime.utcnow()
+    now_local = now_utc + timedelta(hours=tz)
+
+    # 计算记账开始与结束时间
+    start_time = datetime.combine(
+        now_local.date(),
+        datetime.strptime(time_str, "%H:%M").time()
+    )
+    end_time = start_time + timedelta(days=1)
+
+    await update.message.reply_text(
+        f"✅ 工作时间设置为 {time_str}\n"
+        f"目前时间: {now_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"每日记账开始至结束时间:\n"
+        f"今天{start_time.strftime('%Y-%m-%d %H:%M')} → 明天{end_time.strftime('%Y-%m-%d %H:%M')}"
+    )
 # ==============================
 # 权限检查
 # ==============================
