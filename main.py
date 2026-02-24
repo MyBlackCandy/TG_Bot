@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from database import get_db_connection, init_db
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = os.getenv("TOKEN")
 MASTER_ID = os.getenv("MASTER_ID")
@@ -805,6 +806,82 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     os.remove(file_path)
 
+# ==============================
+# Master 选择要清空的群
+# ==============================
+
+async def clearall_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_master(update):
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # ดึงรายชื่อ chat ทั้งหมดที่มี history
+    cursor.execute("SELECT DISTINCT chat_id FROM history ORDER BY chat_id")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        await update.message.reply_text("📭 当前没有任何历史数据")
+        return
+
+    keyboard = []
+    for (chat_id,) in rows:
+        keyboard.append([
+            InlineKeyboardButton(f"🗑️ 群 {chat_id}", callback_data=f"del:{chat_id}")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("🔥 删除全部", callback_data="del_all"),
+        InlineKeyboardButton("❎ 取消", callback_data="cancel")
+    ])
+
+    await update.message.reply_text(
+        "⚠️ 请选择要清空的群：",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ==============================
+# 处理按钮
+# ==============================
+
+async def clearall_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if not await is_master(update):
+        return
+
+    data = query.data
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # ❎ cancel
+    if data == "cancel":
+        await query.edit_message_text("❎ 已取消操作")
+        cursor.close(); conn.close()
+        return
+
+    # 🔥 delete all
+    if data == "del_all":
+        cursor.execute("DELETE FROM history")
+        conn.commit()
+        await query.edit_message_text("🔥 已清空【全部群】的历史记录")
+        cursor.close(); conn.close()
+        return
+
+    # 🗑️ delete one chat
+    if data.startswith("del:"):
+        chat_id = data.split(":")[1]
+        cursor.execute("DELETE FROM history WHERE chat_id=%s", (chat_id,))
+        conn.commit()
+        await query.edit_message_text(f"🗑️ 已清空 群 {chat_id} 的历史记录")
+        cursor.close(); conn.close()
+        return
+
 
 # ==============================
 # 启动
@@ -870,6 +947,10 @@ if __name__ == "__main__":
     # 用户列表
     app.add_handler(CommandHandler("users", list_users))
     app.add_handler(MessageHandler(filters.Regex(r"^/用户列表$"), list_users))
+
+    # Master 清空菜单
+    app.add_handler(CommandHandler("clearall", clearall_menu))
+    app.add_handler(CallbackQueryHandler(clearall_callback))
 
     # 普通文本记账
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
