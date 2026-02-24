@@ -17,10 +17,34 @@ if not MASTER_ID:
 
 logging.basicConfig(level=logging.INFO)
 # ==============================
-# 开始（完整状态面板）
+# 开始 联系卖家
 # ==============================
 
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    text = (
+        "🍬 黑糖果机器人\n"
+        "━━━━━━━━━━━━━━━\n"
+        "需要开通请联系: @Mbcdcandy\n\n"
+        "💰 价格说明:\n"
+        "90U 使用期 30 天\n"
+        "或 可自定义使用期\n"
+        "例如: 10天 / 15天 / 20天\n\n"
+        "🎁 试用:\n"
+        "可以联系 @Mbcdcandy 开通试用期\n\n"
+        "━━━━━━━━━━━━━━━\n"
+        "🆔 你的ID:\n"
+        f"{user_id}\n\n"
+        "📩 请将此ID发送给卖家\n"
+        "🔐 卖家会通过 ID 设置机器人"
+    )
+
+    await update.message.reply_text(text)
+# ==============================
+# 开始（完整状态面板）
+# ==============================
+async def starts_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     ensure_chat_settings(chat_id)
@@ -350,11 +374,42 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_owner(update):
         return
 
-    if not update.message.reply_to_message:
-        await update.message.reply_text("⚠️ 请用回复方式添加成员")
-        return
+    target = None
 
-    target = update.message.reply_to_message.from_user
+    # ====== แบบ reply ======
+    if update.message.reply_to_message:
+        target = update.message.reply_to_message.from_user
+
+    # ====== แบบ /添加 @username ======
+    elif context.args:
+        username = context.args[0].lstrip("@")
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT member_id, username
+            FROM team_members
+            WHERE chat_id=%s AND username=%s
+        """, (update.effective_chat.id, username))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row:
+            await update.message.reply_text("⚠️ 找不到该用户，请先让他在群里说话一次")
+            return
+
+        # สร้าง object จำลองให้เหมือน user
+        class DummyUser:
+            def __init__(self, id, first_name):
+                self.id = id
+                self.first_name = first_name
+
+        target = DummyUser(row[0], row[1])
+
+    else:
+        await update.message.reply_text("⚠️ 请回复用户 或 使用: /添加 @username")
+        return
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -370,7 +425,6 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(f"✅ 已添加操作人: {target.first_name}")
-
 # ==============================
 # 删除操作者
 # ==============================
@@ -379,23 +433,52 @@ async def remove_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_owner(update):
         return
 
-    if not update.message.reply_to_message:
-        await update.message.reply_text("⚠️ 请用回复方式删除成员")
-        return
+    target_id = None
+    target_name = None
 
-    target = update.message.reply_to_message.from_user
+    # ====== แบบ reply ======
+    if update.message.reply_to_message:
+        user = update.message.reply_to_message.from_user
+        target_id = user.id
+        target_name = user.first_name
+
+    # ====== แบบ /删除 @username ======
+    elif context.args:
+        username = context.args[0].lstrip("@")
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT member_id, username
+            FROM team_members
+            WHERE chat_id=%s AND username=%s
+        """, (update.effective_chat.id, username))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row:
+            await update.message.reply_text("⚠️ 找不到该用户，或该用户不是操作者")
+            return
+
+        target_id = row[0]
+        target_name = row[1]
+
+    else:
+        await update.message.reply_text("⚠️ 请回复用户 或 使用: /删除 @username")
+        return
 
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         DELETE FROM team_members
         WHERE member_id=%s AND chat_id=%s
-    """, (target.id, update.effective_chat.id))
+    """, (target_id, update.effective_chat.id))
     conn.commit()
     cursor.close()
     conn.close()
 
-    await update.message.reply_text(f"🗑️ 已删除操作人: {target.first_name}")
+    await update.message.reply_text(f"🗑️ 已删除操作人: {target_name}")
 
 # ==============================
 # 设置时区
@@ -630,11 +713,11 @@ if __name__ == "__main__":
 
     # 中文命令处理
     # ==============================
-
-
+    # 开始
+    app.add_handler(CommandHandler("start", starts_bot))
     # 状态
-    app.add_handler(CommandHandler("start", start_bot))
-    app.add_handler(MessageHandler(filters.Regex(r"^/开始$"), start_bot))
+    app.add_handler(CommandHandler("starts", starts_bot))
+    app.add_handler(MessageHandler(filters.Regex(r"^/开始$"), starts_bot))
 
     # 帮助
     app.add_handler(CommandHandler("help", help_menu))
@@ -650,7 +733,7 @@ if __name__ == "__main__":
 
     # 全部
     app.add_handler(CommandHandler("all", lambda u, c: send_summary(u, c, show_all=True)))
-    app.add_handler(MessageHandler(filters.Regex(r"^/全部$"), lambda u, c: send_summary(u, c, show_all=True)))
+    app.add_handler(MessageHandler(filters.Regex(r"^/全部账单$"), lambda u, c: send_summary(u, c, show_all=True)))
 
     # 撤销
     app.add_handler(CommandHandler("undo", undo_last))
