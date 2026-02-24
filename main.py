@@ -209,17 +209,19 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     display = rows if show_all else rows[-6:]
     start_index = len(rows) - len(display) + 1
 
+    def fmt(n: Decimal):
+        return f"{n:,.2f}".rstrip("0").rstrip(".")
+
     text = "📋 今天记录:\n━━━━━━━━━━━━━━━\n"
     for i, r in enumerate(display):
         local_time = r[2] + timedelta(hours=tz)
-        text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {r[0]} ({r[1]})\n"
+        text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))} ({r[1]})\n"
 
     text += "━━━━━━━━━━━━━━━\n"
-    text += f"合计: {total}\n\n"
+    text += f"合计: {fmt(total)}\n\n"
 
     # ====== สรุปแยกตามคน ======
     person_summary = {}
-
     for amount, user_name, _ in rows:
         amount = Decimal(amount)
         if user_name not in person_summary:
@@ -227,9 +229,16 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
         person_summary[user_name]["count"] += 1
         person_summary[user_name]["total"] += amount
 
+    # ⭐ เรียงจากยอดรวมมาก → น้อย
+    sorted_people = sorted(
+        person_summary.items(),
+        key=lambda x: x[1]["total"],
+        reverse=True
+    )
+
     text += "👤 按人统计:\n"
-    for name, data in person_summary.items():
-        text += f"{name} | {data['count']} 笔 | {data['total']}\n"
+    for name, data in sorted_people:
+        text += f"{name} | {data['count']} 笔 | {fmt(data['total'])}\n"
 
     await update.message.reply_text(text)
 # ==============================
