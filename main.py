@@ -231,8 +231,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
 
-    # ดึงตัวเลข + / -
-    match = re.search(r'([+-])\s*([\d,]+(?:\.\d{1,2})?)', text)
+    # รับเฉพาะ +xx หรือ -xx
+    match = re.match(r'^([+-])\s*([\d,]+(?:\.\d{1,2})?)$', text)
     if not match:
         return
 
@@ -243,12 +243,11 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sign == "-":
         amount = -amount
 
-    # ✅ ถ้าเป็นการ reply → ใช้ชื่อคนที่ถูก reply
+    # === เลือกชื่อ ===
+    # ถ้า reply ใคร → ใช้ชื่อคนนั้น
     if update.message.reply_to_message:
-        target_user = update.message.reply_to_message.from_user
-        user_name = target_user.first_name
+        user_name = update.message.reply_to_message.from_user.first_name
     else:
-        # ถ้าไม่ reply → ใช้คนพิมพ์เหมือนเดิม
         user_name = update.message.from_user.first_name
 
     conn = get_db_connection()
@@ -261,10 +260,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.close()
     conn.close()
 
-    # ตอบกลับให้เห็นชัด
-    sign_text = "+" if amount > 0 else ""
-    await update.message.reply_text(f"{sign_text}{amount} {user_name}")
-
+    # ส่งกลับเฉพาะ summary
     await send_summary(update, context)
 
 # ==============================
