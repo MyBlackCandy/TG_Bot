@@ -703,6 +703,68 @@ async def renew_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ==============================
+# 查看用户列表（按群名，仅 Master）
+# ==============================
+
+async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_master(update):
+        return
+
+    bot = context.bot
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    text = "👥 用户列表（按群名）\n━━━━━━━━━━━━━━━\n\n"
+
+    # ===== Owners =====
+    cursor.execute("SELECT user_id, expire_date FROM admins ORDER BY expire_date DESC")
+    owners = cursor.fetchall()
+
+    text += "👑 Owners:\n"
+    if owners:
+        for uid, exp in owners:
+            try:
+                user = await bot.get_chat(uid)
+                name = user.first_name or str(uid)
+            except:
+                name = str(uid)
+
+            text += f"{name} ({uid}) | 到期: {exp.strftime('%Y-%m-%d %H:%M')}\n"
+    else:
+        text += "（无）\n"
+
+    # ===== Operators =====
+    cursor.execute("""
+        SELECT chat_id, member_id, username
+        FROM team_members
+        ORDER BY chat_id
+    """)
+    rows = cursor.fetchall()
+
+    groups = {}
+    for chat_id, member_id, username in rows:
+        if chat_id not in groups:
+            groups[chat_id] = []
+        groups[chat_id].append((member_id, username))
+
+    for chat_id, members in groups.items():
+        try:
+            chat = await bot.get_chat(chat_id)
+            group_name = chat.title or str(chat_id)
+        except:
+            group_name = f"未知群 ({chat_id})"
+
+        text += f"\n🏷 群: {group_name}\n"
+        for mid, uname in members:
+            text += f"  👥 {uname} ({mid})\n"
+
+    cursor.close()
+    conn.close()
+
+    await update.message.reply_text(text)
+
+
+# ==============================
 # 启动
 # ==============================
 
@@ -725,11 +787,11 @@ if __name__ == "__main__":
     
     # 检查
     app.add_handler(CommandHandler("check", check_status))
-    app.add_handler(MessageHandler(filters.Regex(r"^/检查$"), check_status))
+    app.add_handler(MessageHandler(filters.Regex(r"^/权限检查$"), check_status))
 
     # 账单
     app.add_handler(CommandHandler("report", send_summary))
-    app.add_handler(MessageHandler(filters.Regex(r"^/账单$"), send_summary))
+    app.add_handler(MessageHandler(filters.Regex(r"^/目前账单$"), send_summary))
 
     # 全部
     app.add_handler(CommandHandler("all", lambda u, c: send_summary(u, c, show_all=True)))
@@ -741,7 +803,7 @@ if __name__ == "__main__":
 
     # 重置
     app.add_handler(CommandHandler("reset", reset_current))
-    app.add_handler(MessageHandler(filters.Regex(r"^/重置$"), reset_current))
+    app.add_handler(MessageHandler(filters.Regex(r"^/清空所有记录$"), reset_current))
 
     # 添加操作者
     app.add_handler(CommandHandler("add", add_member))
@@ -762,8 +824,10 @@ if __name__ == "__main__":
     # 续费
     app.add_handler(CommandHandler("renew", renew_owner))
     app.add_handler(MessageHandler(filters.Regex(r"^/续费"), renew_owner))
-
-
+    
+    # 用户列表
+    app.add_handler(CommandHandler("users", list_users))
+    app.add_handler(MessageHandler(filters.Regex(r"^/用户列表$"), list_users))
 
     # 普通文本记账
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
