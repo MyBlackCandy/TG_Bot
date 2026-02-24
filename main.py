@@ -405,10 +405,21 @@ async def set_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_owner(update):
         return
 
+    # ถ้ามาจาก /timezone ใช้ context.args
+    if context.args:
+        arg = context.args[0]
+    else:
+        # ถ้ามาจาก /设置时区 ดึงจากข้อความเอง
+        parts = update.message.text.split()
+        if len(parts) < 2:
+            await update.message.reply_text("用法: /设置时区 +8")
+            return
+        arg = parts[1]
+
     try:
-        tz = int(context.args[0])
+        tz = int(arg)
     except:
-        await update.message.reply_text("用法: /timezone +8")
+        await update.message.reply_text("用法: /设置时区 +8")
         return
 
     conn = get_db_connection()
@@ -423,7 +434,14 @@ async def set_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.close()
     conn.close()
 
-    await update.message.reply_text(f"✅ 时区已设置为 UTC{tz:+}")
+    # ====== เพิ่ม 目前时间 ======
+    now_utc = datetime.utcnow()
+    now_local = now_utc + timedelta(hours=tz)
+
+    await update.message.reply_text(
+        f"✅ 时区已设置为 UTC{tz:+}\n"
+        f"目前时间: {now_local.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
 # ==============================
 # 设置时间
