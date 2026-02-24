@@ -706,6 +706,10 @@ async def renew_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 查看用户列表（按群名，仅 Master）
 # ==============================
 
+# ==============================
+# 查看用户列表（按群显示 Owners + Operators，仅 Master）
+# ==============================
+
 async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_master(update):
         return
@@ -714,26 +718,33 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    text = "👥 用户列表（按群名）\n━━━━━━━━━━━━━━━\n\n"
+    now = datetime.utcnow()
 
-    # ===== Owners =====
+    text = "👥 用户列表（按群）\n━━━━━━━━━━━━━━━\n"
+
+    # ===== 取 Owners =====
     cursor.execute("SELECT user_id, expire_date FROM admins ORDER BY expire_date DESC")
     owners = cursor.fetchall()
 
-    text += "👑 Owners:\n"
-    if owners:
-        for uid, exp in owners:
-            try:
-                user = await bot.get_chat(uid)
-                name = user.first_name or str(uid)
-            except:
-                name = str(uid)
+    owners_info = []
+    for uid, exp in owners:
+        try:
+            user = await bot.get_chat(uid)
+            name = user.first_name or str(uid)
+        except:
+            name = str(uid)
 
-            text += f"{name} ({uid}) | 到期: {exp.strftime('%Y-%m-%d %H:%M')}\n"
-    else:
-        text += "（无）\n"
+        if exp > now:
+            remain = exp - now
+            days = remain.days
+            hours = remain.seconds // 3600
+            status = f"🟢 剩余: {days}天 {hours}小时"
+        else:
+            status = "🔴 已过期"
 
-    # ===== Operators =====
+        owners_info.append((name, uid, exp, status))
+
+    # ===== 取 Operators 按群 =====
     cursor.execute("""
         SELECT chat_id, member_id, username
         FROM team_members
@@ -747,6 +758,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             groups[chat_id] = []
         groups[chat_id].append((member_id, username))
 
+    # ===== 显示 =====
     for chat_id, members in groups.items():
         try:
             chat = await bot.get_chat(chat_id)
@@ -755,8 +767,22 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             group_name = f"未知群 ({chat_id})"
 
         text += f"\n🏷 群: {group_name}\n"
-        for mid, uname in members:
-            text += f"  👥 {uname} ({mid})\n"
+
+        # Owners
+        text += "👑 Owners:\n"
+        if owners_info:
+            for name, uid, exp, status in owners_info:
+                text += f"  {name} ({uid}) | {status}\n"
+        else:
+            text += "  （无）\n"
+
+        # Operators
+        text += "👥 Operators:\n"
+        if members:
+            for mid, uname in members:
+                text += f"  {uname} ({mid})\n"
+        else:
+            text += "  （无）\n"
 
     cursor.close()
     conn.close()
