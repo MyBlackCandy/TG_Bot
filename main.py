@@ -240,34 +240,42 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
         return f"{n:,.2f}".rstrip("0").rstrip(".")
 
     text = "📋 今天记录:\n━━━━━━━━━━━━━━━\n"
+    # เพิ่มส่วนนี้: ถ้าไม่ได้โชว์ทั้งหมด และจำนวนแถวมีมากกว่า 6 ให้ใส่ ...
+    if not show_all and len(rows) > 6:
+        text += "  ...\n"
     for i, r in enumerate(display):
         local_time = r[2] + timedelta(hours=tz)
-        text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))} ({r[1]})\n"
+        # แสดงลำดับที่ + เวลา | จำนวนเงิน
+        text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))} \n" 
+        #text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))} ({r[1]})\n"
+
+
 
     text += "━━━━━━━━━━━━━━━\n"
     text += f"合计: {fmt(total)}\n\n"
-
+    # ส่งข้อความ
+    await update.message.reply_text(text)
     # ====== สรุปแยกตามคน ======
-    person_summary = {}
-    for amount, user_name, _ in rows:
-        amount = Decimal(amount)
-        if user_name not in person_summary:
-            person_summary[user_name] = {"count": 0, "total": Decimal("0")}
-        person_summary[user_name]["count"] += 1
-        person_summary[user_name]["total"] += amount
+    #person_summary = {}
+    #for amount, user_name, _ in rows:
+    #    amount = Decimal(amount)
+    #    if user_name not in person_summary:
+    #        person_summary[user_name] = {"count": 0, "total": Decimal("0")}
+    #    person_summary[user_name]["count"] += 1
+    #    person_summary[user_name]["total"] += amount
 
     # ⭐ เรียงจากยอดรวมมาก → น้อย
-    sorted_people = sorted(
-        person_summary.items(),
-        key=lambda x: x[1]["total"],
-        reverse=True
-    )
+    #sorted_people = sorted(
+    #    person_summary.items(),
+    #    key=lambda x: x[1]["total"],
+     #   reverse=True
+    #)
 
-    text += "👤 按人统计:\n"
-    for name, data in sorted_people:
-        text += f"{name} | {data['count']} 笔 | {fmt(data['total'])}\n"
+    #text += "👤 按人统计:\n"
+    #for name, data in sorted_people:
+    #    text += f"{name} | {data['count']} 笔 | {fmt(data['total'])}\n"
 
-    await update.message.reply_text(text)
+    
 # ==============================
 # 记账
 # ==============================
