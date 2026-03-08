@@ -246,36 +246,39 @@ async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE, show_
     for i, r in enumerate(display):
         local_time = r[2] + timedelta(hours=tz)
         # แสดงลำดับที่ + เวลา | จำนวนเงิน
-        text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))} \n" 
+        text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))}  ({r[1]}) \n" 
         #text += f"{start_index + i}. {local_time.strftime('%H:%M')} | {fmt(Decimal(r[0]))} ({r[1]})\n"
 
 
 
     text += "━━━━━━━━━━━━━━━\n"
-    text += f"合计: {fmt(total)}\n\n"
-    # ส่งข้อความ
-    await update.message.reply_text(text)
-    # ====== สรุปแยกตามคน ======
-    #person_summary = {}
-    #for amount, user_name, _ in rows:
-    #    amount = Decimal(amount)
-    #    if user_name not in person_summary:
-    #        person_summary[user_name] = {"count": 0, "total": Decimal("0")}
-    #    person_summary[user_name]["count"] += 1
-    #    person_summary[user_name]["total"] += amount
-
-    # ⭐ เรียงจากยอดรวมมาก → น้อย
-    #sorted_people = sorted(
-    #    person_summary.items(),
-    #    key=lambda x: x[1]["total"],
-     #   reverse=True
-    #)
-
-    #text += "👤 按人统计:\n"
-    #for name, data in sorted_people:
-    #    text += f"{name} | {data['count']} 笔 | {fmt(data['total'])}\n"
+    text += f"**合计: {fmt(total)}**\n\n"
 
     
+   
+    # ====== สรุปแยกตามคน ======
+    person_summary = {}
+    for amount, user_name, _ in rows:
+        amount = Decimal(amount)
+        if user_name not in person_summary:
+            person_summary[user_name] = {"count": 0, "total": Decimal("0")}
+        person_summary[user_name]["count"] += 1
+        person_summary[user_name]["total"] += amount
+
+    # ⭐ เรียงจากยอดรวมมาก → น้อย
+    sorted_people = sorted(
+        person_summary.items(),
+        key=lambda x: x[1]["total"],
+        reverse=True
+    )
+
+    text += "👤 按人统计:\n"
+    for name, data in sorted_people:
+        text += f"{name} | {data['count']} 笔 | {fmt(data['total'])}\n"
+
+     # ส่งข้อความ
+    await update.message.reply_text(text, parse_mode='Markdown')
+    #await update.message.reply_text(text)
 # ==============================
 # 记账
 # ==============================
